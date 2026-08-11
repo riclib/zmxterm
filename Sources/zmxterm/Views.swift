@@ -41,6 +41,7 @@ struct RootView: View {
     @State private var renamingTab: String?
     @State private var killingTab: String?
     @State private var tabNameDraft = ""
+    @State private var focusRequest: (pane: String, token: Int) = ("", 0)
 
     var body: some View {
         HStack(spacing: 0) {
@@ -50,6 +51,7 @@ struct RootView: View {
                 registry: registry,
                 selectedTab: $selectedTab,
                 selectedPane: $selectedPane,
+                onFocusPane: requestFocus,
                 renamingPane: $renamingPane,
                 killingPane: $killingPane,
                 renamingTab: $renamingTab,
@@ -68,7 +70,8 @@ struct RootView: View {
                         selectedPane: $selectedPane,
                         registry: registry,
                         renamingPane: $renamingPane,
-                        killingPane: $killingPane
+                        killingPane: $killingPane,
+                        focusRequest: focusRequest
                     )
                     .padding(Theme.gap)
                 } else {
@@ -121,7 +124,15 @@ struct RootView: View {
             store.prune(keeping: Set(sessions.map(\.name)))
             reconcileSelection(with: sessions)
         }
-        .onAppear { selectedTab = AppOptions.initialTab ?? registry.tabs.first?.name }
+        .onAppear {
+            selectedTab = AppOptions.initialTab ?? registry.tabs.first?.name
+            // Opening a terminal without a live keyboard is the same bug in a
+            // different coat, so claim focus once the first tab resolves.
+            if let first = resolvedTab?.panes.first?.name {
+                selectedPane = first
+                requestFocus(first)
+            }
+        }
         .onChange(of: selectedPane) { _, name in
             // Looking at a pane is the acknowledgement. Clearing the label
             // rather than a local flag means a second window and `zsm` agree,
@@ -166,10 +177,17 @@ struct RootView: View {
         }
     }
 
+    /// A new pane exists to be typed into, so creating one has to put the
+    /// keyboard in it. Selection alone only draws the ring.
+    private func requestFocus(_ pane: String) {
+        focusRequest = (pane, focusRequest.token + 1)
+    }
+
     private func split(_ axis: SplitAxis) {
         guard let focused = selectedPane ?? resolvedTab?.panes.first?.name else { return }
         if let created = registry.split(pane: focused, axis: axis) {
             selectedPane = created
+            requestFocus(created)
         }
     }
 
@@ -178,6 +196,7 @@ struct RootView: View {
         if let created = registry.newTab(near: near) {
             selectedTab = created
             selectedPane = created
+            requestFocus(created)
         }
     }
 
@@ -213,6 +232,7 @@ struct SidebarView: View {
     let registry: ZmxRegistry
     @Binding var selectedTab: String?
     @Binding var selectedPane: String?
+    let onFocusPane: (String) -> Void
     @Binding var renamingPane: ZmxSession?
     @Binding var killingPane: ZmxSession?
     @Binding var renamingTab: String?
@@ -299,6 +319,7 @@ struct SidebarView: View {
                             .onTapGesture {
                                 selectedTab = tab.name
                                 selectedPane = pane.name
+                                onFocusPane(pane.name)
                             }
                             .contextMenu {
                                 PaneMenu(
@@ -389,6 +410,7 @@ struct SplitCanvas: View {
     let registry: ZmxRegistry
     @Binding var renamingPane: ZmxSession?
     @Binding var killingPane: ZmxSession?
+    let focusRequest: (pane: String, token: Int)
 
     private static let space = "zmxterm.splitCanvas"
 
@@ -416,6 +438,7 @@ struct SplitCanvas: View {
                         label: PaneLabel.display(placed.session, among: layout.panes.map(\.session)),
                         model: store.model(for: placed.session.name),
                         isSelected: selectedPane == placed.session.name,
+                        focusToken: focusRequest.pane == placed.session.name ? focusRequest.token : 0,
                         onFocus: { select($0) },
                         menu: {
                             PaneMenu(
@@ -537,6 +560,8 @@ struct PaneSurfaceView: View {
     let label: String
     @ObservedObject var model: PaneModel
     let isSelected: Bool
+    /// Non-zero when this pane has been asked to take the keyboard.
+    let focusToken: Int
 
     /// Raised when the surface itself takes focus — a click inside the
     /// terminal, or focus arriving from the sidebar.
@@ -554,6 +579,7 @@ struct PaneSurfaceView: View {
                 .onTapGesture { onFocus?(session.name) }
                 .contextMenu(menuItems: menu)
             TerminalSurfaceView(context: model.terminal)
+                .background(TerminalFocusProbe(token: focusToken))
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius))
         .overlay(
