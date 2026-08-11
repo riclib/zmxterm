@@ -230,6 +230,22 @@ extension Zmx {
         // configs that branch on the host have something to branch on.
         environment["TERM_PROGRAM"] = "zmxterm"
         environment["TERM_PROGRAM_VERSION"] = Zmx.appVersion
+
+        // Ghostty's shell integration, so the shell reports its working
+        // directory and marks its prompts instead of the pane having to infer
+        // both from a byte stream. Read through `getenv` rather than the
+        // snapshot above because `GhosttyResources.locate()` sets this with
+        // `setenv` during startup, and a cached snapshot would miss it.
+        if let raw = getenv("GHOSTTY_RESOURCES_DIR") {
+            let added = ShellIntegration.environment(
+                shell: ShellIntegration.loginShell(inherited: environment),
+                resources: String(cString: raw),
+                inherited: environment
+            )
+            for (key, value) in added { environment[key] = value }
+            if !added.isEmpty { Log.debug("shell integration: \(added.keys.sorted().joined(separator: ", "))") }
+        }
+
         process.environment = environment
 
         process.standardInput = FileHandle.nullDevice

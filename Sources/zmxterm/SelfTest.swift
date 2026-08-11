@@ -226,6 +226,58 @@ enum SelfTest {
         expect("and renaming it onto a labelled tab is a merge too",
                rename(PaneOps.renameTab("zaphod", to: "alpha", among: unlabelled)), "merge alpha")
 
+        // Shell integration, where the failure mode is a shell that does not
+        // start, so the reentrancy case matters more than the happy one.
+        let res = "/R"
+        expect("zsh gets ZDOTDIR",
+               env(ShellIntegration.environment(shell: "/bin/zsh", resources: res, inherited: [:])),
+               "ZDOTDIR=/R/shell-integration/zsh")
+        expect("an existing ZDOTDIR is handed over to be restored",
+               env(ShellIntegration.environment(shell: "/bin/zsh", resources: res, inherited: ["ZDOTDIR": "/home/me/zsh"])),
+               "GHOSTTY_ZSH_ZDOTDIR=/home/me/zsh, ZDOTDIR=/R/shell-integration/zsh")
+        // The one that breaks a shell: injecting twice would make the restore
+        // point back at Ghostty's own .zshenv and the user's .zshrc would never
+        // run.
+        expect("injecting onto an injected environment does nothing",
+               env(ShellIntegration.environment(shell: "/bin/zsh", resources: res,
+                                                inherited: ["ZDOTDIR": "/R/shell-integration/zsh"])),
+               "<none>")
+        expect("an empty ZDOTDIR is not something to restore",
+               env(ShellIntegration.environment(shell: "/bin/zsh", resources: res, inherited: ["ZDOTDIR": ""])),
+               "ZDOTDIR=/R/shell-integration/zsh")
+
+        expect("fish prepends to the data path, keeping the XDG defaults",
+               env(ShellIntegration.environment(shell: "/opt/fish", resources: res, inherited: [:])),
+               "XDG_DATA_DIRS=/R/shell-integration/fish:/usr/local/share:/usr/share")
+        expect("an existing data path is preserved, not replaced",
+               env(ShellIntegration.environment(shell: "/opt/fish", resources: res, inherited: ["XDG_DATA_DIRS": "/a:/b"])),
+               "XDG_DATA_DIRS=/R/shell-integration/fish:/a:/b")
+        expect("already first means nothing to do",
+               env(ShellIntegration.environment(shell: "/opt/fish", resources: res,
+                                                inherited: ["XDG_DATA_DIRS": "/R/shell-integration/fish:/a"])),
+               "<none>")
+        expect("already present but not first is moved, not duplicated",
+               env(ShellIntegration.environment(shell: "/opt/fish", resources: res,
+                                                inherited: ["XDG_DATA_DIRS": "/a:/R/shell-integration/fish"])),
+               "XDG_DATA_DIRS=/R/shell-integration/fish:/a")
+        expect("nushell uses its own directory",
+               env(ShellIntegration.environment(shell: "/opt/nu", resources: res, inherited: [:])),
+               "XDG_DATA_DIRS=/R/shell-integration/nushell:/usr/local/share:/usr/share")
+
+        // bash needs `--posix` in argv, which `zmx attach` gives no way to
+        // supply, so setting the variables would only make it look done.
+        expect("bash is left alone",
+               env(ShellIntegration.environment(shell: "/bin/bash", resources: res, inherited: [:])), "<none>")
+        expect("an unknown shell is left alone",
+               env(ShellIntegration.environment(shell: "/bin/tcsh", resources: res, inherited: [:])), "<none>")
+
+        expect("SHELL wins when it is set",
+               ShellIntegration.loginShell(inherited: ["SHELL": "/opt/fish"]), "/opt/fish")
+        // A Dock launch inherits no SHELL; falling through to the password
+        // database is what keeps this agreeing with the shell zmx will spawn.
+        expect("and the password database answers when it is not",
+               ShellIntegration.loginShell(inherited: [:]).isEmpty ? "empty" : "found", "found")
+
         // The live process tree, since the whole point is that it beats the
         // directory guess. Skipped when nothing is running to look at.
         let live = Zmx.list()
@@ -268,6 +320,10 @@ enum SelfTest {
     }
 
     private static func flag(_ value: Bool) -> String { value ? "yes" : "no" }
+
+    private static func env(_ added: [String: String]) -> String {
+        added.isEmpty ? "<none>" : added.keys.sorted().map { "\($0)=\(added[$0]!)" }.joined(separator: ", ")
+    }
 
     private static func rename(_ decision: PaneOps.TabRename) -> String {
         switch decision {
