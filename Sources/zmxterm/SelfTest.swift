@@ -189,6 +189,43 @@ enum SelfTest {
         expect("nor does an unplaced pane sitting in its default tab",
                flag(labelled("m3.sh-1", [:]).canLeaveTab), "no")
 
+        // Renaming a tab onto a name in use is a merge, and a merge is not
+        // reversible, so the interesting property is that the two cases are
+        // told apart before anything is written.
+        let twoTabs = [
+            labelled("alpha.a", ["tab": "alpha"]), labelled("alpha.b", ["tab": "alpha"]),
+            labelled("beta.a", ["tab": "beta"]),
+        ]
+        expect("a free name is a plain rename",
+               rename(PaneOps.renameTab("alpha", to: "gamma", among: twoTabs)), "rename gamma")
+        expect("an occupied name is a merge",
+               rename(PaneOps.renameTab("alpha", to: "beta", among: twoTabs)), "merge beta")
+        expect("renaming to itself does nothing",
+               rename(PaneOps.renameTab("alpha", to: "alpha", among: twoTabs)), "unchanged")
+        expect("a name that folds to nothing does nothing",
+               rename(PaneOps.renameTab("alpha", to: "!!!", among: twoTabs)), "unchanged")
+        // Typed input is folded before the collision test, or "beta!" would
+        // look free and then land on `beta` anyway. Note spaces become dashes
+        // rather than vanishing, so "bet a" is genuinely a different name.
+        expect("punctuation folds before the collision test",
+               rename(PaneOps.renameTab("alpha", to: "beta!", among: twoTabs)), "merge beta")
+        expect("but a space is a dash, and that is a free name",
+               rename(PaneOps.renameTab("alpha", to: "bet a", among: twoTabs)), "rename bet-a")
+        // Case is not folded, because zmx's labels are case-sensitive and this
+        // check has to agree with what `zsm` would show. `Beta` really is a
+        // different tab from `beta`, however unhelpful that is to look at.
+        expect("case is not folded, so it is not a collision",
+               rename(PaneOps.renameTab("alpha", to: " Beta ", among: twoTabs)), "rename Beta")
+
+        // A tab can be occupied by a session that never asked for it: `tab`
+        // falls back to the name before the dot, so `zaphod` holds that name
+        // with no label at all.
+        let unlabelled = [labelled("alpha.a", ["tab": "alpha"]), labelled("zaphod", [:])]
+        expect("an unlabelled session still occupies its name",
+               rename(PaneOps.renameTab("alpha", to: "zaphod", among: unlabelled)), "merge zaphod")
+        expect("and renaming it onto a labelled tab is a merge too",
+               rename(PaneOps.renameTab("zaphod", to: "alpha", among: unlabelled)), "merge alpha")
+
         // The live process tree, since the whole point is that it beats the
         // directory guess. Skipped when nothing is running to look at.
         let live = Zmx.list()
@@ -231,6 +268,14 @@ enum SelfTest {
     }
 
     private static func flag(_ value: Bool) -> String { value ? "yes" : "no" }
+
+    private static func rename(_ decision: PaneOps.TabRename) -> String {
+        switch decision {
+        case .unchanged: "unchanged"
+        case let .rename(slug): "rename \(slug)"
+        case let .merge(slug): "merge \(slug)"
+        }
+    }
 
     private static func describe(_ changes: [PaneOps.LabelChange]) -> String {
         changes.map { change in

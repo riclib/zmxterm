@@ -24,6 +24,13 @@ enum Theme {
     }
 }
 
+/// A rename that turned out to land on an existing tab, held while the user is
+/// asked whether they meant to merge.
+private struct TabMerge: Equatable {
+    let from: String
+    let into: String
+}
+
 struct RootView: View {
     @StateObject private var registry = ZmxRegistry()
     @StateObject private var store = PaneStore()
@@ -40,6 +47,7 @@ struct RootView: View {
     @State private var killingPane: ZmxSession?
     @State private var renamingTab: String?
     @State private var killingTab: String?
+    @State private var mergingTab: TabMerge?
     @State private var tabNameDraft = ""
     @State private var focusRequest: (pane: String, token: Int) = ("", 0)
     @State private var configWatcher = TerminalConfig.Watcher()
@@ -114,11 +122,44 @@ struct RootView: View {
             Button("Cancel", role: .cancel) { renamingTab = nil }
             Button("Rename") {
                 if let tab = renamingTab {
-                    registry.renameTab(tab, to: tabNameDraft)
-                    selectedTab = Zmx.slug(tabNameDraft)
+                    switch registry.planRename(of: tab, to: tabNameDraft) {
+                    case .unchanged:
+                        break
+                    case let .rename(slug):
+                        registry.writeTab(slug, over: tab)
+                        selectedTab = slug
+                    case let .merge(slug):
+                        // Not refused, but not done either: the write is held
+                        // until someone says they meant it.
+                        mergingTab = TabMerge(from: tab, into: slug)
+                    }
                 }
                 renamingTab = nil
             }
+        }
+        .confirmationDialog(
+            "A tab called \(mergingTab?.into ?? "") already exists.",
+            isPresented: .init(get: { mergingTab != nil }, set: { if !$0 { mergingTab = nil } })
+        ) {
+            Button("Merge Tabs") {
+                if let merge = mergingTab {
+                    registry.writeTab(merge.into, over: merge.from)
+                    selectedTab = merge.into
+                }
+                mergingTab = nil
+            }
+            Button("Cancel", role: .cancel) { mergingTab = nil }
+        } message: {
+            // Say the cost rather than a generic "are you sure". Nothing stops
+            // running — this is not Kill — but the `tab` label was the only
+            // record of which tab a pane belonged to, so renaming back does not
+            // undo it.
+            Text("""
+            Renaming \(mergingTab?.from ?? "") onto it puts both tabs' panes in one \
+            layout, interleaved by the slots they already claimed and at half the \
+            sizes they asked for. Nothing stops running, but there is no way back: \
+            the labels saying which tab each pane came from are what gets overwritten.
+            """)
         }
         .onChange(of: renamingTab) { _, new in tabNameDraft = new ?? "" }
         .onChange(of: registry.sessions) { _, sessions in

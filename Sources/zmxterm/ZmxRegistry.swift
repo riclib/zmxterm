@@ -342,9 +342,21 @@ extension ZmxRegistry {
 
     /// A tab, unlike a pane, really can be renamed: its identity is the `tab`
     /// label, so renaming is rewriting that label across its panes.
-    func renameTab(_ tab: String, to newName: String) {
-        let slug = Zmx.slug(newName)
-        guard !slug.isEmpty, slug != tab else { return }
+    ///
+    /// Which is also why it cannot just be done. The same write, aimed at a
+    /// name that is already taken, silently merges two tabs — see
+    /// `PaneOps.TabRename`. So the decision comes back as data and the caller
+    /// handles the merge case by asking.
+    func planRename(of tab: String, to newName: String) -> PaneOps.TabRename {
+        PaneOps.renameTab(tab, to: newName, among: sessions)
+    }
+
+    /// Move every pane of `tab` under the label `slug`.
+    ///
+    /// Rename and merge are the identical write — what separates them is only
+    /// whether the destination was in use and whether anyone was asked — so
+    /// they share one implementation rather than two that could drift.
+    func writeTab(_ slug: String, over tab: String) {
         for pane in sessions where pane.tab == tab {
             Zmx.run(["set", pane.name, "tab=\(slug)"])
         }

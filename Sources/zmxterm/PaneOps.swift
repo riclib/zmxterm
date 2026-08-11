@@ -82,6 +82,38 @@ enum PaneOps {
         return changes
     }
 
+    /// What renaming a tab would actually do, decided before anything is
+    /// written.
+    ///
+    /// A tab's identity *is* its `tab` label, so a rename is a rewrite of that
+    /// label across its panes — and rewriting it to a name already in use is
+    /// indistinguishable, at the moment of writing, from deliberately merging
+    /// two tabs into one. The label was the only record of which tab a pane
+    /// came from, so once both sets share a value there is nothing left to
+    /// separate them by: the merge cannot be undone by renaming back.
+    ///
+    /// Hence a decision returned as data rather than a bare success/failure.
+    /// Merging is a reasonable thing to want; arriving at it by typing a name
+    /// that happened to be taken is not, so the caller is expected to ask.
+    enum TabRename: Equatable {
+        /// Nothing to do — the name folded to empty, or to the name it already has.
+        case unchanged
+        /// The destination is free.
+        case rename(to: String)
+        /// The destination already holds panes, which this would join.
+        case merge(into: String)
+    }
+
+    /// Note the collision test asks for each pane's *effective* tab, not its
+    /// label. A session called `beta` with no `tab` label still occupies the
+    /// name `beta`, because that is where it renders; a check against labels
+    /// alone would call the name free and merge into it anyway.
+    static func renameTab(_ tab: String, to raw: String, among panes: [ZmxSession]) -> TabRename {
+        let slug = Zmx.slug(raw)
+        guard !slug.isEmpty, slug != tab else { return .unchanged }
+        return panes.contains { $0.tab == slug } ? .merge(into: slug) : .rename(to: slug)
+    }
+
     /// Each pane's share of the tab, filling in equal shares where `size` is
     /// absent so halving a pane means something even before anyone has dragged
     /// a divider.
