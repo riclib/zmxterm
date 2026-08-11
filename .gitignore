@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+*.xcodeproj
+.DS_Store
+
+# Downloaded by Resources-src/make-solid-icon.py on demand. JetBrains Mono is
+# OFL-1.1: redistributing it means shipping its licence too, and the script
+# fetches it in seconds, so the repo stays free of it.
+Resources-src/*.ttf

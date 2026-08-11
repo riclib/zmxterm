@@ -1,0 +1,31 @@
+#!/bin/bash
+# zmx-state — report an agent's attention state into its own zmx session.
+#
+#   zmx-state waiting    wants a human
+#   zmx-state failed     went wrong
+#   zmx-state clear      resting
+#
+# Wired to Claude Code hooks, this is the whole "which pane needs me" mechanism:
+# the agent reports its own state, so nothing has to parse a screen. zmx exports
+# ZMX_SESSION into every session, so the hook already knows which pane it is —
+# there is nothing to configure per agent, per team, or per machine.
+#
+# Never fails and never writes to stdout: a hook that errors or chatters
+# disrupts the agent it is reporting on. Outside a zmx session it is a no-op,
+# so the same settings.json works on machines that don't run zmx at all.
+
+set -u
+
+state="${1:-clear}"
+[ -n "${ZMX_SESSION:-}" ] || exit 0
+
+zmx=$(command -v zmx || echo /opt/homebrew/bin/zmx)
+[ -x "$zmx" ] || exit 0
+
+case "$state" in
+    clear) "$zmx" set "$ZMX_SESSION" state= >/dev/null 2>&1 ;;
+    waiting|failed) "$zmx" set "$ZMX_SESSION" "state=$state" >/dev/null 2>&1 ;;
+    *) : ;;
+esac
+
+exit 0
