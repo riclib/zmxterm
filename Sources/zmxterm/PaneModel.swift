@@ -9,7 +9,7 @@ import GhosttyTerminal
 /// the session, and whatever is running in it, carries on.
 @MainActor
 final class PaneModel: ObservableObject {
-    let terminal = TerminalViewState()
+    let terminal = TerminalViewState(controller: TerminalConfig.controller)
     let sessionName: String
 
     @Published private(set) var isAttached = false

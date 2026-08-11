@@ -187,6 +187,24 @@ prebuilt `GhosttyKit.xcframework` as a Swift package. Session persistence is
 Agent icons and their licences are listed in
 `Sources/zmxterm/Resources/icons/CREDITS.md`.
 
+## Configuration
+
+Your Ghostty config, used as-is — `$XDG_CONFIG_HOME/ghostty/config`,
+`~/.config/ghostty/config`, or the macOS Application Support path, in that
+order. The surface is libghostty, so it parses exactly the file Ghostty parses:
+no mapping layer, no subset to maintain, and a setting added to Ghostty tomorrow
+works here without a release.
+
+Settings that only mean something to a whole application — `keybind`,
+`copy-on-select`, window chrome — are parsed and simply do not apply to an
+embedded surface.
+
+The config is loaded with an empty `TerminalTheme`. The controller otherwise
+overlays a light/dark palette *after* the file, which would silently override a
+`theme =` line. The trade is that panes follow the config rather than the system
+appearance, which is what someone who wrote a theme into their config already
+asked for.
+
 ## Packaging
 
 ```sh
