@@ -64,6 +64,14 @@ per-pane controller would only be a way for them to drift. It is created with an
 *empty* `TerminalTheme` on purpose: the controller otherwise overlays a
 light/dark palette after the user's config, silently overriding their `theme =`.
 
+**A config with `theme =` needs `GHOSTTY_RESOURCES_DIR`.** libghostty resolves
+theme names against Ghostty's resources directory and finds it through that
+variable, which a Ghostty-launched shell exports and the Dock does not — so the
+config loaded when the app was started from a terminal and was silently rejected
+otherwise. `TerminalConfig.locateGhosttyResources()` sets it. Note the failure
+mode: one config diagnostic makes libghostty reject the *whole* file and fall
+back to defaults, so a single unresolvable key loses every other setting too.
+
 ## Conventions
 
 Labels accept only `[A-Za-z0-9._-]`. Fold user input with `Zmx.slug`.
