@@ -203,7 +203,7 @@ extension Zmx {
         process.waitUntilExit()
     }
 
-    static let appVersion = "0.1"
+    static let appVersion = "0.7.1"
 
     static func apply(_ changes: [PaneOps.LabelChange]) {
         for change in changes {

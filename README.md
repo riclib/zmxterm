@@ -187,6 +187,23 @@ prebuilt `GhosttyKit.xcframework` as a Swift package. Session persistence is
 Agent icons and their licences are listed in
 `Sources/zmxterm/Resources/icons/CREDITS.md`.
 
+## Packaging
+
+```sh
+Scripts/package.sh                              # .app + signed + DMG
+NOTARY_PROFILE=zmxterm Scripts/package.sh       # …also notarised and stapled
+```
+
+A SwiftPM executable is not an app bundle, so `Scripts/package.sh` assembles one
+by hand — Info.plist, icon, and the SwiftPM resource bundle, which has to be
+copied into `Contents/Resources` for `Bundle.module` to keep resolving. The
+project stays a plain `swift build` with no `.xcodeproj` to drift out of sync,
+at the cost of this script owning the plist.
+
+It signs with a Developer ID certificate when one exists and falls back to a
+development certificate otherwise, saying so — a development-signed bundle runs
+on the machine that built it and is rejected by Gatekeeper everywhere else.
+
 ## Status
 
 Pre-1.0 and built in a single sitting. The model is settled; the surface is not.
