@@ -62,7 +62,10 @@ enum ForegroundProcess {
         return nil
     }
 
-    private static func shell(_ path: String, _ arguments: [String]) -> String {
+    /// Not private: `EphemeralReaper` needs a second `ps` view — the tty each
+    /// session's shell is on — and a second copy of this would be a second
+    /// thing to get wrong about pipe draining.
+    static func shell(_ path: String, _ arguments: [String]) -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments

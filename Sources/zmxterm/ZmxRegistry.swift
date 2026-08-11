@@ -13,6 +13,38 @@ struct ZmxSession: Identifiable, Equatable {
     let command: String
     let labels: [String: String]
 
+    /// When the daemon says this session came into being. `zmx list` reports it
+    /// as a unix timestamp and nothing used to read it, so it was dropped along
+    /// with the other daemon-owned fields. `ReapPolicy` needs it: age since
+    /// creation is the only clock the app has for "has anyone cared about this
+    /// pane lately", so the field has to survive the parse.
+    ///
+    /// Optional because a missing or unparseable `created` must not read as
+    /// "created at the epoch, therefore ancient, therefore disposable". Nil
+    /// means unknown, and the reaper treats unknown as too young to touch.
+    let createdAt: Date?
+
+    /// Written by hand rather than left to the memberwise initialiser so that
+    /// `createdAt` can default, and every existing construction site — the
+    /// tests, the command back-fill below — keeps compiling unchanged.
+    init(
+        name: String,
+        pid: String,
+        clients: Int,
+        startDir: String,
+        command: String,
+        labels: [String: String],
+        createdAt: Date? = nil
+    ) {
+        self.name = name
+        self.pid = pid
+        self.clients = clients
+        self.startDir = startDir
+        self.command = command
+        self.labels = labels
+        self.createdAt = createdAt
+    }
+
     var id: String { name }
 
     /// Which tab this pane belongs to. Defaults to the part of the name before
@@ -123,7 +155,11 @@ enum Zmx {
                 clients: Int(fields["clients"] ?? "") ?? 0,
                 startDir: fields["start_dir"] ?? fields["started_in"] ?? "",
                 command: fields["cmd"] ?? "",
-                labels: fields.filter { !reserved.contains($0.key) }
+                labels: fields.filter { !reserved.contains($0.key) },
+                // Still reserved, so it stays out of `labels` — it is the
+                // daemon's field, not something anyone can set — but no longer
+                // discarded on the way past.
+                createdAt: Double(fields["created"] ?? "").map { Date(timeIntervalSince1970: $0) }
             )
         }
     }
@@ -163,7 +199,8 @@ final class ZmxRegistry: ObservableObject {
             guard session.command.isEmpty, let found = running[session.pid] else { return session }
             return ZmxSession(
                 name: session.name, pid: session.pid, clients: session.clients,
-                startDir: session.startDir, command: found, labels: session.labels
+                startDir: session.startDir, command: found, labels: session.labels,
+                createdAt: session.createdAt
             )
         }
         Log.debug("registry refresh: \(listed.count) sessions via \(Zmx.executable)")

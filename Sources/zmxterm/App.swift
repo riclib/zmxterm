@@ -23,6 +23,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         installMenu()
 
+        // The only call site, on purpose: reaping is irreversible, so "where
+        // does this happen" should have exactly one answer. It does nothing at
+        // all unless the preference is on, and the check lives inside rather
+        // than here so that no future caller can forget it. Launch is the only
+        // safe moment — a pass on a timer could take a pane out from under
+        // somebody mid-session.
+        EphemeralReaper.runOnLaunch()
+
         // Quitting normally runs applicationWillTerminate, but a SIGTERM —
         // `pkill`, a stopped dev run — does not, and every client we fail to
         // detach lingers on its daemon holding a vote on the session's size.

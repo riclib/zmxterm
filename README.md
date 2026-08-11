@@ -95,6 +95,39 @@ Focusing a pane clears its `state`. The acknowledgement is a label rather than a
 local flag, so a second window and `zsm` agree, and "I already saw that one"
 survives a restart.
 
+## Reaping
+
+Every split and every new tab writes `ephemeral=1`, and nothing used to remove
+one, so scratch panes accumulated as real sessions forever. `ReapPolicy` decides
+which of them are safe to destroy; it is a pure function of the session list,
+two `ps`-derived facts and a `now`, so the whole thing is checked headlessly in
+`--selftest` without a daemon and without killing anything.
+
+**It is off unless you turn it on**, and there is no menu item, because the
+consequence of a wrong reap is somebody's work gone with no undo:
+
+```sh
+defaults write land.liberato.zmxterm reapEphemeralOnLaunch -bool true   # the .app
+defaults write zmxterm reapEphemeralOnLaunch -bool true                 # swift run
+swift run zmxterm --selftest    # prints the verdict for every live session first
+```
+
+`ephemeral=1` with nobody attached only makes a pane a candidate. It is then
+kept by any of: a `title`, a `state`, a label this build does not recognise,
+anything running in it that isn't its own login shell, a `tab` label placing it
+in someone else's wall, being the last pane of its tab, being younger than
+twelve hours, or a terminal that has moved in the last twelve hours. Everything
+unknown — no `created` field, no readable tty — keeps the pane too, so a `ps`
+that fails means nothing is reaped rather than everything.
+
+Note what the age test is and is not. zmx has no "last touched" field, and the
+session's socket does not have one either: a unix socket's mtime is set when it
+is created and never moves again. The pty device node does move, on every read
+and write through the tty, which is a real time of last I/O — but it cannot say
+whether the bytes were a keystroke or a background job's output. Time since
+creation, plus silence, plus nothing running, plus nobody attached is the whole
+of what is actually known.
+
 ## Quota
 
 The foot of the sidebar shows the account's five-hour, weekly and per-model
@@ -161,6 +194,7 @@ PaneTree.swift      `pos` labels → split tree
 PaneLayout.swift    tree → frames, in one pass; divider drag math
 PaneModel.swift     a surface bound to a session; PaneStore caches them
 Views.swift         sidebar, rail, split canvas, pane chrome
+ReapPolicy.swift    which scratch panes are safe to destroy; the launch pass
 SelfTest.swift      headless tree and drag tests
 bin/zmx-state       the attention hook
 ```
