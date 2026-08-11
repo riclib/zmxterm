@@ -10,4 +10,11 @@ enum Log {
         guard enabled else { return }
         FileHandle.standardError.write(Data((message() + "\n").utf8))
     }
+
+    /// Written whether or not tracing is on. Reserved for the irreversible: a
+    /// session this app destroyed has no undo and leaves no other trace, so the
+    /// line naming it has to exist even in a run nobody thought to debug.
+    static func notice(_ message: String) {
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
 }

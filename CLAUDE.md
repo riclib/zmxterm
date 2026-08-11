@@ -79,6 +79,20 @@ dropped, so something has to ask the daemon to redraw. `.Init` on an
 already-attached connection does exactly that. The size is unchanged across a
 tab switch, which is why `resize()` cannot be the trigger.
 
+**`ended` and `exit_code` are not labels.** They arrive in the same
+tab-separated line as the labels, on any session started with `zmx run`, and
+`zmx set <name> ended=` does not remove them — they are the daemon's fields.
+`Zmx.list` cannot tell them apart from labels, so they land in `labels`. Treat
+any field you did not write as somebody else's; `ReapPolicy` does, which is why
+a `zmx run` session is never reaped.
+
+**Only one code path destroys a session nobody asked about.**
+`EphemeralReaper.runOnLaunch`, called once from `applicationDidFinishLaunching`,
+guarded by a `UserDefaults` flag that is off unless someone writes it. Keep it
+that way: the decision itself is a pure function in `ReapPolicy` precisely so it
+can be argued about in `--selftest` rather than on a live machine, and the
+`--selftest` dry run must never gain a path to `zmx kill`.
+
 ## Conventions
 
 Labels accept only `[A-Za-z0-9._-]`. Fold user input with `Zmx.slug`.

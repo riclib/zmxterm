@@ -191,6 +191,202 @@ enum SelfTest {
             }
         }
 
+        // ── Reaping ────────────────────────────────────────────────────────
+        //
+        // The policy that deletes things. It is a pure function of a session
+        // list, some `ps`-derived facts and a clock, which is the only reason
+        // it can be checked at all: nothing below runs a reap, touches a
+        // daemon, or needs a session to exist. Every check names the veto it is
+        // about, because a reaper that stops keeping something for the reason
+        // you thought is worse than one that stops working.
+
+        func fixture(
+            _ name: String,
+            clients: Int = 0,
+            created: Date? = nil,
+            labels: [String: String] = [:]
+        ) -> ZmxSession {
+            ZmxSession(
+                name: name, pid: "1", clients: clients, startDir: "/tmp",
+                command: "", labels: labels, createdAt: created
+            )
+        }
+        func facts(_ foreground: String? = nil, _ lastActivity: Date? = nil) -> ReapPolicy.Facts {
+            ReapPolicy.Facts(foreground: foreground, lastActivity: lastActivity)
+        }
+        func why(_ pane: ZmxSession, among sessions: [ZmxSession], _ known: ReapPolicy.Facts, _ now: Date) -> String {
+            ReapPolicy.verdict(for: pane, among: sessions, facts: known, now: now).reason
+        }
+
+        // The regression that matters most: these are the sessions that were
+        // actually running on this machine while the policy was written, with
+        // their real labels. Three of them carry `ephemeral=1` — two tabs a
+        // human has been working in all day and one that had been sitting at
+        // zero clients — and not one of them is disposable. If a change to the
+        // policy makes this check fail, the change is wrong, whatever it
+        // improved elsewhere.
+        let observed = Date(timeIntervalSince1970: 1_786_487_904)
+        let liveMachine: [ZmxSession] = [
+            fixture("arthur", clients: 1, created: Date(timeIntervalSince1970: 1_786_482_693),
+                    labels: ["ephemeral": "1", "pos": "h0", "size": "0.500", "tab": "arthur", "title": "orc"]),
+            fixture("ford", clients: 1, created: Date(timeIntervalSince1970: 1_786_485_430),
+                    labels: ["ephemeral": "1", "pos": "v0", "size": "0.500", "tab": "ford"]),
+            fixture("m3.dev-1", clients: 1, created: Date(timeIntervalSince1970: 1_786_486_573),
+                    labels: ["pos": "v0.h1.v0", "size": "0.129", "tab": "m3", "title": "dev-1"]),
+            fixture("m3.dev-2", clients: 1, created: Date(timeIntervalSince1970: 1_786_486_573),
+                    labels: ["pos": "v0.h1.v1", "size": "0.129", "tab": "m3", "title": "dev-2"]),
+            fixture("m3.rev-1", clients: 1, created: Date(timeIntervalSince1970: 1_786_486_573),
+                    labels: ["pos": "v0.h1.v2", "size": "0.129", "state": "waiting", "tab": "m3", "title": "rev-1"]),
+            fixture("m3.sh-1", clients: 1, created: Date(timeIntervalSince1970: 1_786_486_044),
+                    labels: ["pos": "v1.h0", "size": "0.125", "tab": "m3", "title": "sh-1"]),
+            fixture("m3.sh-2", clients: 1, created: Date(timeIntervalSince1970: 1_786_486_044),
+                    labels: ["pos": "v1.h1", "size": "0.125", "tab": "m3", "title": "sh-2"]),
+            fixture("trillian", clients: 1, created: Date(timeIntervalSince1970: 1_786_485_818),
+                    labels: ["pos": "v0.h0", "size": "0.364", "tab": "m3", "title": "orc"]),
+            fixture("zaphod", clients: 0, created: Date(timeIntervalSince1970: 1_786_482_941),
+                    labels: ["ephemeral": "1", "tab": "zaphod"]),
+        ]
+        // Measured the same minute: an agent under `ford`, a bare shell under
+        // `zaphod` whose terminal had last moved twenty-two minutes earlier.
+        let liveFacts: [String: ReapPolicy.Facts] = [
+            "ford": facts("claude", Date(timeIntervalSince1970: 1_786_487_904)),
+            "arthur": facts("claude", Date(timeIntervalSince1970: 1_786_487_976)),
+            "m3.dev-1": facts("claude", Date(timeIntervalSince1970: 1_786_487_904)),
+            "m3.dev-2": facts("claude", Date(timeIntervalSince1970: 1_786_487_904)),
+            "m3.rev-1": facts("claude", Date(timeIntervalSince1970: 1_786_487_904)),
+            "m3.sh-1": facts(nil, Date(timeIntervalSince1970: 1_786_487_827)),
+            "m3.sh-2": facts(nil, Date(timeIntervalSince1970: 1_786_487_827)),
+            "trillian": facts("claude", Date(timeIntervalSince1970: 1_786_487_904)),
+            "zaphod": facts(nil, Date(timeIntervalSince1970: 1_786_486_644)),
+        ]
+        expect("the live machine loses nothing",
+               ReapPolicy.reapable(from: liveMachine, facts: liveFacts, now: observed).joined(separator: ", "), "")
+        // …and not because the clock happened to be kind. Run the same list a
+        // month later, with nothing having been touched since: still nothing,
+        // because every one of those sessions is held by a signal that has
+        // nothing to do with age.
+        let muchLater = observed.addingTimeInterval(30 * 24 * 60 * 60)
+        expect("…and still loses nothing a month later",
+               ReapPolicy.reapable(from: liveMachine, facts: liveFacts, now: muchLater).joined(separator: ", "), "")
+        expect("ford is held by its attached client",
+               why(liveMachine[1], among: liveMachine, liveFacts["ford"]!, muchLater), "1 client(s) attached")
+        expect("zaphod is held by being a whole tab",
+               why(liveMachine[8], among: liveMachine, liveFacts["zaphod"]!, muchLater), "the only pane in its tab")
+
+        // A synthetic wall to test the vetoes one at a time: an orchestrator
+        // pane somebody named, and beside it a scratch pane opened yesterday,
+        // abandoned, at zero clients, running nothing, its terminal silent
+        // since. That last one is what this feature exists to remove.
+        let clock = Date(timeIntervalSince1970: 1_800_000_000)
+        let yesterday = clock.addingTimeInterval(-13 * 60 * 60)
+        let orc = fixture("wall.orc", clients: 1, created: yesterday,
+                          labels: ["pos": "v0", "size": "0.5", "tab": "wall", "title": "orc"])
+        func scratch(_ extra: [String: String] = [:], clients: Int = 0, created: Date? = yesterday) -> ZmxSession {
+            fixture("wall.shell-2", clients: clients, created: created,
+                    labels: ["ephemeral": "1", "pos": "v1", "size": "0.5", "tab": "wall"].merging(extra) { _, new in new })
+        }
+        let abandoned = facts(nil, yesterday)
+        func verdictOfScratch(_ pane: ZmxSession, _ known: ReapPolicy.Facts = abandoned) -> String {
+            why(pane, among: [orc, pane], known, clock)
+        }
+
+        expect("a stale scratch pane is reaped", verdictOfScratch(scratch()), "reapable")
+        expect("…and the reaper names it and nothing else",
+               ReapPolicy.reapable(from: [orc, scratch()],
+                                   facts: ["wall.shell-2": abandoned], now: clock).joined(separator: ", "),
+               "wall.shell-2")
+
+        // Each veto on its own, against the pane that would otherwise go.
+        expect("an attached client vetoes", verdictOfScratch(scratch(clients: 1)), "1 client(s) attached")
+        expect("a title vetoes", verdictOfScratch(scratch(["title": "logs"])), "titled logs")
+        expect("a waiting agent vetoes", verdictOfScratch(scratch(["state": "waiting"])), "state=waiting")
+        expect("a failed pane vetoes", verdictOfScratch(scratch(["state": "failed"])), "state=failed")
+        expect("a label we don't understand vetoes", verdictOfScratch(scratch(["ended": "1786488155"])), "carries ended")
+        expect("something running vetoes", verdictOfScratch(scratch(), facts("vim", yesterday)), "running vim")
+        expect("no ephemeral mark, no candidate",
+               verdictOfScratch(scratch(["ephemeral": ""])), "not ephemeral")
+        // Gathered into someone else's wall by an orchestrator: the `tab` label
+        // disagrees with the name, and the pane has company there.
+        let borrowed = scratch(["tab": "spike"])
+        expect("a pane arranged into another tab vetoes",
+               why(borrowed, among: [orc, borrowed, fixture("spike.orc", clients: 1, created: yesterday, labels: ["tab": "spike"])],
+                   abandoned, clock),
+               "gathered into spike")
+        expect("the last pane of a tab vetoes",
+               why(scratch(), among: [scratch()], abandoned, clock), "the only pane in its tab")
+
+        // Not knowing is not permission.
+        expect("an unknown creation time vetoes", verdictOfScratch(scratch(created: nil)), "age unknown")
+        expect("an unreadable terminal vetoes", verdictOfScratch(scratch(), facts(nil, nil)), "last activity unknown")
+
+        // The thresholds, at the boundary, from both directions.
+        func decision(_ pane: ZmxSession, _ known: ReapPolicy.Facts) -> String {
+            ReapPolicy.verdict(for: pane, among: [orc, pane], facts: known, now: clock).isReap ? "reap" : "keep"
+        }
+        let twelveHours: TimeInterval = 12 * 60 * 60
+        expect("exactly twelve hours old is old enough",
+               decision(scratch(created: clock.addingTimeInterval(-twelveHours)),
+                        facts(nil, clock.addingTimeInterval(-twelveHours))), "reap")
+        expect("a minute short of twelve hours is not",
+               decision(scratch(created: clock.addingTimeInterval(-twelveHours + 60)),
+                        facts(nil, yesterday)), "keep")
+        expect("a young pane says how young", verdictOfScratch(scratch(created: clock.addingTimeInterval(-11.5 * 3600))),
+               "only 11.5h old")
+        expect("silence of exactly twelve hours is silent enough",
+               decision(scratch(), facts(nil, clock.addingTimeInterval(-twelveHours))), "reap")
+        expect("a pane that spoke an hour ago is kept",
+               decision(scratch(), facts(nil, clock.addingTimeInterval(-3600))), "keep")
+        expect("a recently active pane says when",
+               verdictOfScratch(scratch(), facts(nil, clock.addingTimeInterval(-11.5 * 3600))), "active 11.5h ago")
+
+        // Two stale scratch panes in one tab: the tab must survive, so exactly
+        // one goes, and it is the older. Evaluating each against the original
+        // list rather than the shrinking one would empty the tab.
+        let twins = [
+            fixture("wall.shell-2", created: yesterday,
+                    labels: ["ephemeral": "1", "pos": "v0", "tab": "wall"]),
+            fixture("wall.shell-3", created: yesterday.addingTimeInterval(600),
+                    labels: ["ephemeral": "1", "pos": "v1", "tab": "wall"]),
+        ]
+        expect("a tab of two stale panes keeps one",
+               ReapPolicy.reapable(from: twins,
+                                   facts: ["wall.shell-2": abandoned, "wall.shell-3": abandoned],
+                                   now: clock).joined(separator: ", "),
+               "wall.shell-2")
+
+        // A dry run over whatever is really running, printed and never acted
+        // on. There is no path from here to `zmx kill`: `gatherFacts` reads
+        // `ps`, `verdict` is pure, and the killing lives in `runOnLaunch`,
+        // which this does not call.
+        if live.isEmpty {
+            print("skip no live sessions to judge")
+        } else {
+            let measured = EphemeralReaper.gatherFacts(for: live)
+            let rightNow = Date()
+            let inAMonth = rightNow.addingTimeInterval(30 * 24 * 60 * 60)
+            print("ok   reap dry run (nothing is killed here):")
+            for session in live.sorted(by: { $0.name < $1.name }) {
+                let known = measured[session.name] ?? ReapPolicy.Facts.unknown
+                let now = ReapPolicy.verdict(for: session, among: live, facts: known, now: rightNow).reason
+                let later = ReapPolicy.verdict(for: session, among: live, facts: known, now: inAMonth).reason
+                // The measured facts alongside the verdict, because the useful
+                // question about a surprising verdict is always which fact was
+                // missing.
+                let age = session.createdAt.map { String(format: "age %.2fh", rightNow.timeIntervalSince($0) / 3600) }
+                let quiet = known.lastActivity.map { String(format: "quiet %.2fh", rightNow.timeIntervalSince($0) / 3600) }
+                let measurements = [
+                    age ?? "no creation time", known.foreground.map { "running \($0)" }, quiet ?? "no terminal found",
+                ]
+                print("       \(session.name) → now: \(now); in 30 days: \(later) "
+                    + "[\(measurements.compactMap { $0 }.joined(separator: ", "))]")
+            }
+            // The pass itself, which is not quite the sum of the lines above:
+            // `reapable` also enforces that a tab keeps a pane, so a tab whose
+            // panes all read "reapable" still loses only the older ones.
+            let pass = ReapPolicy.reapable(from: live, facts: measured, now: rightNow)
+            print("       a reap pass now would kill: \(pass.isEmpty ? "nothing" : pass.joined(separator: ", "))")
+        }
+
         print(failures == 0 ? "\nall passed" : "\n\(failures) failed")
         return failures == 0 ? 0 : 1
     }
