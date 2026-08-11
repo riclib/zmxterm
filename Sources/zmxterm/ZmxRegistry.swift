@@ -194,6 +194,12 @@ extension Zmx {
         var environment = ProcessInfo.processInfo.environment
         environment["ZMXTERM"] = "1"
         environment["ZMXTERM_VERSION"] = Zmx.appVersion
+        environment["TERM"] = Zmx.terminalType
+        environment["COLORTERM"] = "truecolor"
+        // The convention Terminal.app, iTerm and Ghostty all follow, so shell
+        // configs that branch on the host have something to branch on.
+        environment["TERM_PROGRAM"] = "zmxterm"
+        environment["TERM_PROGRAM_VERSION"] = Zmx.appVersion
         process.environment = environment
 
         process.standardInput = FileHandle.nullDevice
@@ -204,6 +210,31 @@ extension Zmx {
     }
 
     static let appVersion = "0.7.1"
+
+    /// What to tell the shell it is talking to.
+    ///
+    /// A GUI app inherits no `TERM`, so a session it creates gets an empty one
+    /// and every curses program in it misbehaves — no colour, broken `clear`,
+    /// vim refusing to start.
+    ///
+    /// `xterm-ghostty` is the honest answer, because libghostty is what draws
+    /// the pane. But naming a terminfo entry that the machine cannot resolve is
+    /// worse than under-claiming: programs fail outright rather than degrade.
+    /// The entry ships with Ghostty, so probe for it once and fall back to the
+    /// universally present `xterm-256color` when it isn't there.
+    static let terminalType: String = {
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: "/usr/bin/infocmp")
+        probe.arguments = ["xterm-ghostty"]
+        probe.standardOutput = FileHandle.nullDevice
+        probe.standardError = FileHandle.nullDevice
+        do {
+            try probe.run()
+            probe.waitUntilExit()
+            if probe.terminationStatus == 0 { return "xterm-ghostty" }
+        } catch {}
+        return "xterm-256color"
+    }()
 
     static func apply(_ changes: [PaneOps.LabelChange]) {
         for change in changes {
