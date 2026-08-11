@@ -173,6 +173,22 @@ enum SelfTest {
                             command: "zsh", labels: ["title": "logs"])
         expect("a title wins over the name", PaneLabel.display(titled, among: [titled]), "logs")
 
+        // Taking a pane off a tab. Every session belongs to *some* tab, so what
+        // a test can settle is where the pane lands — not whether it vanishes,
+        // because nothing here can make it vanish.
+        let gathered = labelled("spike.dev-1", ["tab": "wall", "pos": "v0.h1", "size": "0.25"])
+        expect("a gathered pane can leave its tab", flag(gathered.canLeaveTab), "yes")
+        expect("and falls back to the name before the dot", unplaced(gathered).tab, "spike")
+        expect("leaving drops the share as well as the slot",
+               describe(unplaced(gathered).sizeFraction.map { [$0] }), "<none>")
+
+        // A pane already under its own name is still removable if it has been
+        // placed — clearing `pos` is what pulls it out of a split.
+        expect("a placed pane can leave its own tab", flag(labelled("m3.sh-1", ["tab": "m3", "pos": "v1.h0"]).canLeaveTab), "yes")
+        expect("an unplaced lone pane has nowhere to go", flag(labelled("zaphod", [:]).canLeaveTab), "no")
+        expect("nor does an unplaced pane sitting in its default tab",
+               flag(labelled("m3.sh-1", [:]).canLeaveTab), "no")
+
         // The live process tree, since the whole point is that it beats the
         // directory guess. Skipped when nothing is running to look at.
         let live = Zmx.list()
@@ -201,6 +217,20 @@ enum SelfTest {
         if let size { labels["size"] = String(size) }
         return ZmxSession(name: name, pid: "1", clients: 1, startDir: "/tmp", command: "zsh", labels: labels)
     }
+
+    private static func labelled(_ name: String, _ labels: [String: String]) -> ZmxSession {
+        ZmxSession(name: name, pid: "1", clients: 1, startDir: "/tmp", command: "zsh", labels: labels)
+    }
+
+    /// The pane as it is after `ZmxRegistry.removeFromTab`, modelled by dropping
+    /// exactly the labels that command clears.
+    private static func unplaced(_ pane: ZmxSession) -> ZmxSession {
+        var labels = pane.labels
+        for key in ZmxSession.placementLabels { labels.removeValue(forKey: key) }
+        return labelled(pane.name, labels)
+    }
+
+    private static func flag(_ value: Bool) -> String { value ? "yes" : "no" }
 
     private static func describe(_ changes: [PaneOps.LabelChange]) -> String {
         changes.map { change in

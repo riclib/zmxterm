@@ -19,9 +19,27 @@ struct ZmxSession: Identifiable, Equatable {
     /// the first dot, so `spike-dev-1.shell` groups under `spike-dev-1` with no
     /// label set at all; an orchestrator building a team wall sets `tab=spike`
     /// on panes from several different agents.
-    var tab: String {
-        labels["tab"] ?? name.split(separator: ".", maxSplits: 1).first.map(String.init) ?? name
+    var tab: String { labels["tab"] ?? defaultTab }
+
+    /// Where this pane lands with no `tab` label at all. Worth naming
+    /// separately from `tab` because clearing the label is not the same as
+    /// making a pane disappear — every session belongs to some tab, always, so
+    /// a pane taken off a wall falls back here rather than off the screen.
+    var defaultTab: String {
+        name.split(separator: ".", maxSplits: 1).first.map(String.init) ?? name
     }
+
+    /// The labels that say where a pane sits, as opposed to what it is. Named
+    /// once so `removeFromTab` and the test that checks where a pane lands
+    /// cannot drift apart.
+    static let placementLabels = ["pos", "size", "tab"]
+
+    /// Whether taking this pane out of its tab would actually move it.
+    ///
+    /// A pane that is already sitting unplaced in its own default tab has
+    /// nowhere to be removed to, and offering the command anyway would be a
+    /// menu item that visibly does nothing.
+    var canLeaveTab: Bool { tab != defaultTab || position != nil }
 
     /// The `.part` suffix, or the whole name for a tab's primary pane.
     var part: String? {
@@ -330,6 +348,29 @@ extension ZmxRegistry {
         for pane in sessions where pane.tab == tab {
             Zmx.run(["set", pane.name, "tab=\(slug)"])
         }
+        refresh()
+    }
+
+    /// Take a pane off its tab without touching what runs in it.
+    ///
+    /// This is the gesture the model was built for and the one the UI was
+    /// missing: a pane is a *view* of a session, so there has to be a way to
+    /// stop viewing it that isn't killing it. Clearing the placement labels is
+    /// the whole implementation — the same `zmx set <name> pos= size= tab=` an
+    /// agent would run, which is the test for whether a feature belongs here.
+    ///
+    /// `size` goes with the other two on purpose. A share is a share *of a
+    /// tab* (see `PaneNode.declaredShare`), so a pane that has left the tab is
+    /// carrying a number that no longer refers to anything.
+    ///
+    /// Note what this does not do: it cannot make a pane vanish. `tab` falls
+    /// back to `defaultTab` when the label is absent, so the pane reappears
+    /// under the part of its name before the first dot — off the wall it was
+    /// gathered onto, still running, still findable in the sidebar. That is
+    /// the honest behaviour to promise, and it is why the menu says "Remove
+    /// from Tab" rather than "Hide".
+    func removeFromTab(_ session: String) {
+        Zmx.run(["set", session] + ZmxSession.placementLabels.map { "\($0)=" })
         refresh()
     }
 

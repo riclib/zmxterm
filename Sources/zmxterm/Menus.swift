@@ -45,6 +45,15 @@ struct PaneMenu: View {
 
         Divider()
 
+        // Deliberately adjacent to Kill, because the two are only distinguishable
+        // if you can see them together: this one takes the pane off the tab and
+        // leaves the process alone, the next one ends it. Neither word is a
+        // synonym for the other, and no dialog interrupts this one — there is
+        // nothing to lose, and the pane is still in the sidebar under its own
+        // name afterwards.
+        if pane.canLeaveTab {
+            Button("Remove from Tab") { registry.removeFromTab(pane.name) }
+        }
         Button("Kill Session…") { killing = pane }
     }
 }
