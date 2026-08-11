@@ -61,6 +61,13 @@ decodes plausible nonsense; it showed up as a 22×112 window resizing a session 
 `ipc.Resize` is `{ rows, cols, xpixel, ypixel }` as four little-endian `u16` —
 rows before cols.
 
+`ipc.Info` is 552 bytes and, unlike `Header`, an `extern struct`: C layout, so
+natural alignment and tail padding. Nothing documents it, so the offsets were
+read off hexdumps of live sessions and confirmed field by field against values
+`zmx list` already prints. The table is in the doc comment on `ZmxInfo`, and
+`--selftest` decodes a captured payload so a zmx release that moves a field
+fails a test instead of quietly reporting a plausible wrong number.
+
 A client that never sends `.initialize` is a passive observer: the daemon only
 sets `has_terminal_client` on `.Init`, so it streams `.output` without screen
 replay and without counting as an attach. That's the mode for peek overlays and
@@ -88,8 +95,26 @@ Wire it to Claude Code hooks in `~/.claude/settings.json`:
 ```
 
 Nothing here is Claude-specific — anything that can run a command can fill the
-same label, and `Info` already carries `task_exit_code` for plain shells (not
-yet read; `zmx list` doesn't expose it, so it needs an `.info` round trip).
+same label, and a second source fills it with no hook at all: an `.info` probe
+per session reads `task_ended_at` and `task_exit_code`, and a task that ends
+non-zero writes `state=failed` on itself. Same label, same rendering.
+
+That watcher only ever writes into an empty `state`. A zero exit clears
+nothing — an agent's `waiting` means it needs a human, and a background build
+finishing is not an answer — and it acts on a *transition*, never on a poll, so
+a failure long past does not repaint itself red at every launch.
+
+Two limits, both zmx 0.7.0's rather than ours, and both measured:
+
+- Only `zmx run` tasks count. Task mode appends a `ZMX_TASK_COMPLETED:$?` marker
+  and the daemon reads the status out of that; a command *typed* into the shell
+  produces no marker and moves neither field. A typed `zig build` turning its
+  pane red needs shell integration, which is a different feature.
+- The exit code latches at a session's first task. Later tasks move
+  `task_ended_at` and leave `task_exit_code` alone — run 3, 5, 7, 0, 3 down one
+  session and it reads 3 throughout. `zmx wait` and the daemon's own log report
+  the same stale number, so this is upstream's to fix; when it is, nothing here
+  changes.
 
 Focusing a pane clears its `state`. The acknowledgement is a label rather than a
 local flag, so a second window and `zsm` agree, and "I already saw that one"
@@ -154,8 +179,9 @@ reflowing the session for every other client watching it.
 ## Files
 
 ```
-ZmxProtocol.swift   frame encoding, tags, the 8-byte header
+ZmxProtocol.swift   frame encoding, tags, the 8-byte header, `ipc.Info`
 ZmxClient.swift     one socket, one session; attach / detach / resize / input
+TaskWatcher.swift   `.info` poll; a failed task sets `state=failed` on itself
 ZmxRegistry.swift   `zmx list` → model, socket-dir watch + 2s label poll
 PaneTree.swift      `pos` labels → split tree
 PaneLayout.swift    tree → frames, in one pass; divider drag math
@@ -167,9 +193,9 @@ bin/zmx-state       the attention hook
 
 ## Not here yet
 
-⌘K, peek overlays, per-pane process icons resolved from a `ps` tree walk, and
-`task_exit_code` from `Info` so a plain shell that exits non-zero turns its card
-red without any hook at all.
+⌘K, peek overlays, and shell integration — which is what a command *typed* into
+a pane would need before it could turn that pane red, since zmx only sees the
+exit status of a `zmx run` task.
 
 ## Building
 

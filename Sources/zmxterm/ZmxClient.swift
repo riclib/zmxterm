@@ -77,6 +77,51 @@ final class ZmxClient: @unchecked Sendable {
         return entries.filter { $0 != "logs" }.sorted()
     }
 
+    /// Ask one session for its `ipc.Info` and hang up. Blocking — call it off
+    /// the main thread.
+    ///
+    /// This is a connection of its own rather than a message on an attached
+    /// pane's client, and it deliberately never sends `.initialize`. Sessions
+    /// with no pane on screen have no `ZmxClient` at all, and the ones that do
+    /// must not have an extra `.Init` shoved down them — `.Init` is what makes
+    /// the daemon replay the screen and count the connection as a terminal
+    /// client, so probing through an attached pane would repaint it and
+    /// probing an unattached session by attaching would reflow it to whatever
+    /// size we made up. A connection that only ever sends `.info` is invisible
+    /// to the session: `clients` in the reply does not even include us.
+    ///
+    /// The read is bounded by `SO_RCVTIMEO` rather than by a deadline loop,
+    /// because a session that is quietly producing no output would otherwise
+    /// park a thread on `read` forever.
+    static func info(session: String, timeout: TimeInterval = 1.0) -> ZmxInfo? {
+        guard let descriptor = try? connect(to: socketDirectory().appendingPathComponent(session)) else {
+            return nil
+        }
+        defer { close(descriptor) }
+
+        var limit = timeval(tv_sec: Int(timeout), tv_usec: Int32((timeout - timeout.rounded(.down)) * 1_000_000))
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
+
+        let request = ZmxFrame.encode(.info)
+        let sent = request.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
+        guard sent == request.count else { return nil }
+
+        // A passive connection still receives `.output`, so the reply is not
+        // necessarily the first frame back. Read until the `.info` arrives or
+        // the socket goes quiet.
+        var decoder = ZmxFrameDecoder()
+        var chunk = [UInt8](repeating: 0, count: 16 * 1024)
+        while true {
+            let count = chunk.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, $0.count) }
+            guard count > 0 else { return nil }
+            decoder.feed(Data(chunk[0 ..< count]))
+            while let message = decoder.next() {
+                guard message.tag == .info else { continue }
+                return ZmxInfo.decode(message.payload)
+            }
+        }
+    }
+
     /// Connect and attach as a terminal client at `size`.
     func attach(size: ZmxResize) throws {
         try queue.sync {

@@ -32,6 +32,20 @@ plausible nonsense.
 **`zmx run` is task mode.** It echoes the command, appends `ZMX_TASK_COMPLETED`
 and runs under bash. Create shells with `zmx attach <name> < /dev/null`.
 
+**`task_exit_code` is only the *first* task's, and only for `zmx run`.** A
+command typed into the shell writes no marker, so neither `task_ended_at` nor
+`task_exit_code` moves at all. And zmx 0.7.0 latches the code: run 3, 5, 7, 0, 3
+down one session and every reading is 3, while `task_ended_at` advances each
+time. The daemon log and `zmx wait` repeat the same stale number, so it is not a
+misread of the struct. `ZmxTaskWatch` is written for a daemon that reports
+honestly and says so; don't "fix" it by working around this.
+
+**`zmx attach` inside a zmx session switches that session instead of creating
+one.** The client sees `ZMX_SESSION` and sends `.SwitchSession` to the daemon it
+is already talking to, so a script creating test sessions from an agent's own
+pane silently creates nothing — and yanks the human's pane elsewhere if the
+target does exist. Prefix with `env -u ZMX_SESSION`.
+
 **`zmx list --where k=v` is advertised in `--help` and not implemented.** It
 accepts the flag and returns everything. Filter with `grep`.
 

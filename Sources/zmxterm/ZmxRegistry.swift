@@ -85,7 +85,17 @@ enum Zmx {
     /// `zmx list` already carries labels inline, so one call yields the entire
     /// model — sessions and their placement together.
     static func list() -> [ZmxSession] {
-        let reserved: Set<String> = ["name", "session_name", "pid", "clients", "created", "start_dir", "started_in", "cmd"]
+        // `ended` and `exit_code` appear only on a session that has completed a
+        // `zmx run` task, and they arrive in the same tab-separated stream as
+        // the labels, so without naming them here every finished task would
+        // invent two labels nobody set. The app reads those two over `.info`
+        // instead — see `ZmxInfo` — where they are typed fields rather than
+        // text that shares a namespace with whatever a human chose to call a
+        // label.
+        let reserved: Set<String> = [
+            "name", "session_name", "pid", "clients", "created",
+            "start_dir", "started_in", "cmd", "ended", "exit_code",
+        ]
 
         return run(["list"]).split(separator: "\n").compactMap { rawLine in
             var line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -120,6 +130,9 @@ final class ZmxRegistry: ObservableObject {
 
     private var directorySource: DispatchSourceFileSystemObject?
     private var pollTimer: Timer?
+    /// Tasks ride along on the same poll, over a socket of their own, because
+    /// `zmx list` is the wrong place to read them from. See `ZmxTaskWatcher`.
+    private let taskWatcher = ZmxTaskWatcher()
 
     init() {
         refresh()
@@ -150,6 +163,10 @@ final class ZmxRegistry: ObservableObject {
         }
         Log.debug("registry refresh: \(listed.count) sessions via \(Zmx.executable)")
         if listed != sessions { sessions = listed }
+
+        // Deliberately after the assignment, so the watcher judges against the
+        // labels this refresh just read rather than the previous round's.
+        taskWatcher.poll(listed) { [weak self] in self?.refresh() }
     }
 
     /// Sessions grouped into tabs, tabs sorted by name, panes by position.
