@@ -58,6 +58,12 @@ committing per event would be a subprocess per frame.
 an agent is waiting. It is guarded by app-active plus a settle delay, because
 SwiftUI hands out focus during launch while the app is still inactive.
 
+**One `TerminalController` serves every pane** (`TerminalConfig.controller`).
+Panes differ in what they are attached to, never in how they are drawn, so a
+per-pane controller would only be a way for them to drift. It is created with an
+*empty* `TerminalTheme` on purpose: the controller otherwise overlays a
+light/dark palette after the user's config, silently overriding their `theme =`.
+
 ## Conventions
 
 Labels accept only `[A-Za-z0-9._-]`. Fold user input with `Zmx.slug`.

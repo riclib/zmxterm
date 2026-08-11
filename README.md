@@ -195,6 +195,10 @@ order. The surface is libghostty, so it parses exactly the file Ghostty parses:
 no mapping layer, no subset to maintain, and a setting added to Ghostty tomorrow
 works here without a release.
 
+The file is watched, so edits apply to every open pane without a relaunch —
+including the rename-over that most editors do rather than writing in place.
+⇧⌘, forces a reload, the same binding Ghostty uses.
+
 Settings that only mean something to a whole application — `keybind`,
 `copy-on-select`, window chrome — are parsed and simply do not apply to an
 embedded surface.

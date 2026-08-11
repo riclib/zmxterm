@@ -59,4 +59,65 @@ enum TerminalConfig {
         }
         return controller
     }()
+
+    /// Re-read the config and push it to every pane at once.
+    ///
+    /// One controller serves all panes, so a reload is a single call rather
+    /// than a walk over surfaces.
+    @discardableResult
+    static func reload() -> Bool {
+        guard let path else { return false }
+        let ok = controller.updateConfigSource(.file(path))
+        Log.debug("config: reload \(ok ? "applied" : "rejected") \(path)")
+        return ok
+    }
+
+    /// Watch the config for edits.
+    ///
+    /// Without this the config is read once at launch, which is a confusing
+    /// way to behave: a setting added while the app is running appears not to
+    /// work, and the only clue is that it starts working tomorrow.
+    ///
+    /// Editors rename over the file rather than writing in place, which fires
+    /// `.delete`/`.rename` and invalidates the descriptor — so a rewatch is
+    /// part of normal operation, not error handling.
+    @MainActor
+    final class Watcher {
+        private var source: DispatchSourceFileSystemObject?
+        private var pending: DispatchWorkItem?
+
+        init() { watch() }
+        deinit { source?.cancel() }
+
+        private func watch() {
+            guard let path = TerminalConfig.path else { return }
+            let descriptor = open(path, O_EVTONLY)
+            guard descriptor >= 0 else { return }
+
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: descriptor,
+                eventMask: [.write, .delete, .rename, .extend],
+                queue: .main
+            )
+            source.setEventHandler { [weak self] in self?.scheduleReload() }
+            source.setCancelHandler { close(descriptor) }
+            source.resume()
+            self.source = source
+        }
+
+        /// A save can arrive as several events; apply the last one.
+        private func scheduleReload() {
+            pending?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                TerminalConfig.reload()
+                // Re-open: the file this descriptor pointed at may no longer be
+                // the file at that path.
+                self?.source?.cancel()
+                self?.source = nil
+                self?.watch()
+            }
+            pending = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+        }
+    }
 }

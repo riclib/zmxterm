@@ -42,6 +42,7 @@ struct RootView: View {
     @State private var killingTab: String?
     @State private var tabNameDraft = ""
     @State private var focusRequest: (pane: String, token: Int) = ("", 0)
+    @State private var configWatcher = TerminalConfig.Watcher()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -153,6 +154,9 @@ struct RootView: View {
             Group {
                 Button("") { isRailCollapsed.toggle() }
                     .keyboardShortcut("b", modifiers: .command)
+                // ⇧⌘, is Ghostty's own reload binding.
+                Button("") { TerminalConfig.reload() }
+                    .keyboardShortcut(",", modifiers: [.command, .shift])
                 Button("") { split(.horizontal) }
                     .keyboardShortcut("d", modifiers: .command)
                 Button("") { split(.vertical) }
