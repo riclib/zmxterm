@@ -104,6 +104,20 @@ final class ZmxClient: @unchecked Sendable {
         }
     }
 
+    /// Ask the daemon to send the screen again.
+    ///
+    /// `.Init` on an already-attached connection makes the daemon serialize its
+    /// terminal state and send it back as `.Output` — the same restore a fresh
+    /// attach gets. That is the only way to repaint a surface that was thrown
+    /// away and rebuilt, because output arriving while it did not exist was
+    /// dropped on the floor: the session had nowhere to write it.
+    func repaint() {
+        queue.async { [self] in
+            guard fd >= 0, attached, let lastSize else { return }
+            writeFrame(.initialize, lastSize.payload)
+        }
+    }
+
     /// Detach this client and drop the connection. The session keeps running.
     func detach() {
         queue.async { [self] in

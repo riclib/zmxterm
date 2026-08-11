@@ -597,6 +597,11 @@ struct PaneSurfaceView: View {
         // was focus granted and immediately revoked, so it took two clicks.
         // `isFocused` comes from the surface's own delegate and needs no
         // binding at all.
+        // A tab switch destroys this surface and builds a new, empty one while
+        // the client stays attached, so the size never changes and nothing asks
+        // the daemon to redraw. Without this the pane comes back blank until
+        // something else forces a resize.
+        .onAppear { model.repaintIfAttached() }
         .onReceive(model.terminal.$isFocused) { focused in
             guard focused else { return }
             onFocus?(session.name)

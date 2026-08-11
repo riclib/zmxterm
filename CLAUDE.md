@@ -72,6 +72,13 @@ otherwise. `TerminalConfig.locateGhosttyResources()` sets it. Note the failure
 mode: one config diagnostic makes libghostty reject the *whole* file and fall
 back to defaults, so a single unresolvable key loses every other setting too.
 
+**A surface is destroyed and rebuilt on every tab switch**, while the client
+under it stays attached — the model is cached in `PaneStore`, the view is not.
+The new surface is empty, and output that arrived while it did not exist was
+dropped, so something has to ask the daemon to redraw. `.Init` on an
+already-attached connection does exactly that. The size is unchanged across a
+tab switch, which is why `resize()` cannot be the trigger.
+
 ## Conventions
 
 Labels accept only `[A-Za-z0-9._-]`. Fold user input with `Zmx.slug`.

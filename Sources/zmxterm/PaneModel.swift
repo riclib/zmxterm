@@ -82,6 +82,14 @@ final class PaneModel: ObservableObject {
         client.resize(size)
     }
 
+    /// Repaint a surface that was destroyed and rebuilt — switching tabs does
+    /// exactly that, while the client underneath stays attached.
+    func repaintIfAttached() {
+        guard didAttach else { return }
+        Log.debug("repaint \(sessionName)")
+        client.repaint()
+    }
+
     func detach() {
         client.detach()
         isAttached = false
