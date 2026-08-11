@@ -173,6 +173,24 @@ enum SelfTest {
                             command: "zsh", labels: ["title": "logs"])
         expect("a title wins over the name", PaneLabel.display(titled, among: [titled]), "logs")
 
+        // The live process tree, since the whole point is that it beats the
+        // directory guess. Skipped when nothing is running to look at.
+        let live = Zmx.list()
+        if live.isEmpty {
+            print("skip no live sessions to resolve")
+        } else {
+            let running = ForegroundProcess.resolve(sessionPIDs: live.map(\.pid))
+            print("ok   resolved \(running.count)/\(live.count) sessions:")
+            for session in live.sorted(by: { $0.name < $1.name }) {
+                let found = running[session.pid] ?? "—"
+                let icon = PaneIcon.asset(for: ZmxSession(
+                    name: session.name, pid: session.pid, clients: session.clients,
+                    startDir: session.startDir, command: found, labels: session.labels
+                ))
+                print("       \(session.name) → running \(found), icon \(icon)")
+            }
+        }
+
         print(failures == 0 ? "\nall passed" : "\n\(failures) failed")
         return failures == 0 ? 0 : 1
     }

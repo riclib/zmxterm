@@ -135,7 +135,19 @@ final class ZmxRegistry: ObservableObject {
     }
 
     func refresh() {
-        let listed = Zmx.list().sorted { $0.name < $1.name }
+        var listed = Zmx.list().sorted { $0.name < $1.name }
+
+        // zmx reports no `cmd`, so fill it in from each session's process tree.
+        // Without this every pane looks like a bare shell and the icon rule has
+        // only the working directory to go on.
+        let running = ForegroundProcess.resolve(sessionPIDs: listed.map(\.pid))
+        listed = listed.map { session in
+            guard session.command.isEmpty, let found = running[session.pid] else { return session }
+            return ZmxSession(
+                name: session.name, pid: session.pid, clients: session.clients,
+                startDir: session.startDir, command: found, labels: session.labels
+            )
+        }
         Log.debug("registry refresh: \(listed.count) sessions via \(Zmx.executable)")
         if listed != sessions { sessions = listed }
     }
@@ -209,7 +221,7 @@ extension Zmx {
         process.waitUntilExit()
     }
 
-    static let appVersion = "0.7.5"
+    static let appVersion = "0.7.6"
 
     /// What to tell the shell it is talking to.
     ///
