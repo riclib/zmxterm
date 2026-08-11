@@ -415,7 +415,14 @@ enum SelfTest {
         expect("a title vetoes", verdictOfScratch(scratch(["title": "logs"])), "titled logs")
         expect("a waiting agent vetoes", verdictOfScratch(scratch(["state": "waiting"])), "state=waiting")
         expect("a failed pane vetoes", verdictOfScratch(scratch(["state": "failed"])), "state=failed")
-        expect("a label we don't understand vetoes", verdictOfScratch(scratch(["ended": "1786488155"])), "carries ended")
+        // Any label outside this build's vocabulary. The namespace is shared
+        // with orchestrators, so a pane somebody's script is tracking by a
+        // field we have never heard of is a pane somebody is using. Note this
+        // deliberately is *not* `ended`/`exit_code` any more: those are the
+        // daemon's fields and `Zmx.list` now reserves them, so they no longer
+        // reach `labels` and no longer accidentally protect `zmx run` sessions.
+        expect("a label we don't understand vetoes",
+               verdictOfScratch(scratch(["owner": "trillian"])), "carries owner")
         expect("something running vetoes", verdictOfScratch(scratch(), facts("vim", yesterday)), "running vim")
         expect("no ephemeral mark, no candidate",
                verdictOfScratch(scratch(["ephemeral": ""])), "not ephemeral")
@@ -508,6 +515,82 @@ enum SelfTest {
             // panes all read "reapable" still loses only the older ones.
             let pass = ReapPolicy.reapable(from: live, facts: measured, now: rightNow)
             print("       a reap pass now would kill: \(pass.isEmpty ? "nothing" : pass.joined(separator: ", "))")
+        }
+
+        // `ipc.Info`, decoded from a payload captured off a real socket rather
+        // than hand-built, because the whole risk in that decoder is that the
+        // layout was deduced by hexdump and could be wrong. This one is zmx
+        // 0.7.0 answering `.info` for a session created as `bash -i` in
+        // /private/tmp with one client attached, whose first `zmx run` task had
+        // just exited 7 — every field carrying a value we can name.
+        let captured = Data(base64Encoded:
+            "AQAAAAAAAAAslAAABwAMAGJhc2ggLWkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAvcHJpdmF0ZS90bXAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAbqd7agAAAABvp3tq" +
+            "AAAAAAcAAAAAAAAA"
+        )!
+        let info = ZmxInfo.decode(captured)
+        expect("info payload is 552 bytes", String(captured.count), "552")
+        expect("info clients", String(info?.clients ?? -1), "1")
+        expect("info pid", String(info?.pid ?? -1), "37932")
+        expect("info command", info?.command ?? "<nil>", "bash -i")
+        expect("info start dir", info?.startDirectory ?? "<nil>", "/private/tmp")
+        expect("info created at", String(info?.createdAt ?? -1), "1786488686")
+        expect("info task ended at", String(info?.taskEndedAt ?? -1), "1786488687")
+        expect("info task exit code", String(info?.taskExitCode ?? -1), "7")
+
+        // A daemon that grew or shrank `Info` is something to notice rather
+        // than to read half of, so a wrong-sized payload is nil, not a struct
+        // full of plausible nonsense.
+        expect("a short info payload decodes to nil",
+               ZmxInfo.decode(captured.dropLast()) == nil ? "nil" : "decoded", "nil")
+        expect("a long info payload decodes to nil",
+               ZmxInfo.decode(captured + Data([0])) == nil ? "nil" : "decoded", "nil")
+
+        // When a finished task turns its own pane red. Every rule here exists
+        // to stop a poll loop from behaving like an event, or from writing over
+        // a signal somebody else put there.
+        func flags(_ state: String?, _ code: Int32, _ ended: Int64, _ lastEnded: Int64?) -> String {
+            ZmxTaskWatch.shouldFlagFailure(
+                state: state, exitCode: code, endedAt: ended, lastEndedAt: lastEnded
+            ) ? "failed" : "-"
+        }
+        expect("a new non-zero exit flags the pane", flags(nil, 7, 200, 100), "failed")
+        expect("a new zero exit flags nothing", flags(nil, 0, 200, 100), "-")
+        expect("the same completion twice is not a new failure", flags(nil, 7, 200, 200), "-")
+        expect("the first sighting of a session only takes a baseline", flags(nil, 7, 200, nil), "-")
+        // A session with no task at all reads 0, which must not look like a
+        // completion the instant we start watching it.
+        expect("a session that has never run a task", flags(nil, 0, 0, nil), "-")
+        // An agent asking for a human outranks a report about a build, and a
+        // red nobody has acknowledged is already red.
+        expect("waiting is never overwritten", flags("waiting", 7, 200, 100), "-")
+        expect("failed is not re-asserted", flags("failed", 7, 200, 100), "-")
+        // Clocks move backwards across a daemon restart; only forward is news.
+        expect("a stamp going backwards is not a completion", flags(nil, 7, 100, 200), "-")
+
+        // The round trip itself, which needs a daemon and so reports rather
+        // than fails — the layout above was read off exactly these bytes, and
+        // the cheapest way to notice a zmx release moving a field is to see the
+        // pid stop matching the one `zmx list` printed a line earlier.
+        if live.isEmpty {
+            print("skip no live sessions to ask for info")
+        } else {
+            for session in live.sorted(by: { $0.name < $1.name }) {
+                guard let info = ZmxClient.info(session: session.name) else {
+                    print("FAIL info \(session.name): no reply"); failures += 1; continue
+                }
+                let agrees = String(info.pid) == session.pid
+                if !agrees { failures += 1 }
+                print("\(agrees ? "ok  " : "FAIL") info \(session.name): pid \(info.pid), "
+                    + "clients \(info.clients), task ended \(info.taskEndedAt) exit \(info.taskExitCode)")
+            }
         }
 
         print(failures == 0 ? "\nall passed" : "\n\(failures) failed")

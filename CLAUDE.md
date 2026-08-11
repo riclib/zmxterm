@@ -32,6 +32,20 @@ plausible nonsense.
 **`zmx run` is task mode.** It echoes the command, appends `ZMX_TASK_COMPLETED`
 and runs under bash. Create shells with `zmx attach <name> < /dev/null`.
 
+**`task_exit_code` is only the *first* task's, and only for `zmx run`.** A
+command typed into the shell writes no marker, so neither `task_ended_at` nor
+`task_exit_code` moves at all. And zmx 0.7.0 latches the code: run 3, 5, 7, 0, 3
+down one session and every reading is 3, while `task_ended_at` advances each
+time. The daemon log and `zmx wait` repeat the same stale number, so it is not a
+misread of the struct. `ZmxTaskWatch` is written for a daemon that reports
+honestly and says so; don't "fix" it by working around this.
+
+**`zmx attach` inside a zmx session switches that session instead of creating
+one.** The client sees `ZMX_SESSION` and sends `.SwitchSession` to the daemon it
+is already talking to, so a script creating test sessions from an agent's own
+pane silently creates nothing — and yanks the human's pane elsewhere if the
+target does exist. Prefix with `env -u ZMX_SESSION`.
+
 **`zmx list --where k=v` is advertised in `--help` and not implemented.** It
 accepts the flag and returns everything. Filter with `grep`.
 
@@ -80,11 +94,17 @@ already-attached connection does exactly that. The size is unchanged across a
 tab switch, which is why `resize()` cannot be the trigger.
 
 **`ended` and `exit_code` are not labels.** They arrive in the same
-tab-separated line as the labels, on any session started with `zmx run`, and
-`zmx set <name> ended=` does not remove them — they are the daemon's fields.
-`Zmx.list` cannot tell them apart from labels, so they land in `labels`. Treat
-any field you did not write as somebody else's; `ReapPolicy` does, which is why
-a `zmx run` session is never reaped.
+tab-separated line as the labels, on any session that has completed a `zmx run`
+task, and `zmx set <name> ended=` does not remove them — they are the daemon's
+fields. `Zmx.list` reserves both, so they stay out of `labels`; before it did,
+the app was inventing two labels nobody had set on every finished task.
+
+That reserving has a consequence worth knowing, because it crosses two
+features: while those fields *were* landing in `labels`, `ReapPolicy`'s "a label
+this build does not recognise" veto fired on them, and a `zmx run` session was
+accidentally unreapable forever. It no longer is. The veto still stands for
+labels an orchestrator actually sets, which is what it was for; a finished task
+is now judged on age, silence and the rest like anything else.
 
 **Only one code path destroys a session nobody asked about.**
 `EphemeralReaper.runOnLaunch`, called once from `applicationDidFinishLaunching`,
