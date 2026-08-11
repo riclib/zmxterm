@@ -209,7 +209,7 @@ extension Zmx {
         process.waitUntilExit()
     }
 
-    static let appVersion = "0.7.4"
+    static let appVersion = "0.7.5"
 
     /// What to tell the shell it is talking to.
     ///

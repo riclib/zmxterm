@@ -15,3 +15,14 @@ put them on anything that looks like a product of theirs.
 It takes the `s.` monogram from solidmon's own wordmark script (same JetBrains
 Mono Bold outlines, same `-0.04em` tracking, same `#D71500` accent) and sets it
 on the tile from `docs/brand/logo.png`.
+
+## Ghostty resources
+
+`Sources/zmxterm/Resources/ghostty/themes` and `Resources/terminfo` are copied
+from [Ghostty](https://github.com/ghostty-org/ghostty) (MIT). The colour schemes
+originate from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
+(MIT).
+
+They are shipped so that a `theme =` line resolves, and so `xterm-ghostty`
+exists, on a machine with no Ghostty installed. An installed Ghostty is always
+preferred — its copies will be newer than ours.

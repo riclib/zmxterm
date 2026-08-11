@@ -11,4 +11,8 @@ enum AppOptions {
     static let initialTab: String? = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("-") }
 }
 
+// Before anything reads a config or probes terminfo: both resolve against
+// Ghostty's resource tree, and neither says so when it cannot find it.
+GhosttyResources.locate()
+
 ZmxTermApp.main()

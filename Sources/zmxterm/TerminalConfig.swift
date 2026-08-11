@@ -32,37 +32,7 @@ enum TerminalConfig {
     /// One controller for every pane. Panes differ in what they are attached to,
     /// never in how they are drawn, so a per-pane controller would only be a way
     /// for them to drift apart.
-    /// Point libghostty at Ghostty's resources before loading anything.
-    ///
-    /// `theme = …` resolves against that directory, and libghostty finds it
-    /// through `GHOSTTY_RESOURCES_DIR`. A shell started *by* Ghostty exports it,
-    /// so a config with a theme loads when the app is launched from a terminal
-    /// and fails when launched from the Dock — and fails silently, because an
-    /// unresolvable theme is a config diagnostic and a single diagnostic makes
-    /// libghostty reject the whole file and fall back to defaults.
-    private static func locateGhosttyResources() {
-        let manager = FileManager.default
-        let hasThemes: (String) -> Bool = { manager.fileExists(atPath: $0 + "/themes") }
-
-        if let existing = ProcessInfo.processInfo.environment["GHOSTTY_RESOURCES_DIR"], hasThemes(existing) {
-            return
-        }
-        let candidates = [
-            "/Applications/Ghostty.app/Contents/Resources/ghostty",
-            NSHomeDirectory() + "/Applications/Ghostty.app/Contents/Resources/ghostty",
-            "/opt/homebrew/share/ghostty",
-            "/usr/local/share/ghostty",
-        ]
-        guard let found = candidates.first(where: hasThemes) else {
-            Log.debug("config: no ghostty resources dir found; `theme =` will not resolve")
-            return
-        }
-        setenv("GHOSTTY_RESOURCES_DIR", found, 1)
-        Log.debug("config: resources dir \(found)")
-    }
-
     static let controller: TerminalController = {
-        locateGhosttyResources()
         guard let path else {
             Log.debug("config: none found, using defaults")
             return TerminalController()

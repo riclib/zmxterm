@@ -13,7 +13,13 @@ let package = Package(
             dependencies: [
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
             ],
-            resources: [.copy("Resources/icons")],
+            resources: [
+                .copy("Resources/icons"),
+                // Ghostty's themes and terminfo, so `theme =` resolves and
+                // xterm-ghostty exists on machines without Ghostty installed.
+                .copy("Resources/ghostty"),
+                .copy("Resources/terminfo"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
