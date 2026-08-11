@@ -64,6 +64,15 @@ enum ReapPolicy {
         /// anything touched since yesterday is somebody's current context.
         var minimumQuiet: TimeInterval = 12 * 60 * 60
 
+        /// What both spans become for the last pane of a tab.
+        ///
+        /// Losing a surplus pane from a wall is tidying; losing the last one
+        /// takes the tab with it, and a tab is a place you navigate to by name
+        /// rather than a slot in a layout. That asymmetry is real, but it is a
+        /// difference of degree, so it buys a longer wait rather than
+        /// permanent immunity — a week of silence is not a workspace.
+        var soloMultiplier: Double = 14
+
         static let `default` = Thresholds()
     }
 
@@ -155,23 +164,20 @@ enum ReapPolicy {
             return .keep("gathered into \(labelled)")
         }
 
-        // Never take the last pane of a tab.
+        // The last pane of a tab waits longer, but it does wait rather than
+        // being immune.
         //
-        // This is the rule that keeps the blast radius at "a surplus pane" and
-        // away from "a place you navigate to". A tab is something a human
-        // refers to out loud — that is why tabs get Guide names and panes get
-        // numbers — so a tab vanishing between quitting and relaunching is a
-        // workspace disappearing, while a spare pane vanishing from a wall is
-        // the tidying this feature is for.
-        //
-        // It has a real cost, and it should be stated rather than discovered: a
-        // new tab nobody named and nobody used is never reaped by this policy,
-        // even though it is the exact thing `ephemeral=1` was invented for. The
-        // trade is deliberate. Live sessions that carry `ephemeral=1` for
-        // historical reasons and sit alone in their own tab are common on this
-        // machine, and none of them is scratch.
+        // A tab is something a human refers to out loud — that is why tabs get
+        // Guide names and panes get numbers — so taking the last pane takes a
+        // place you navigate to, where taking a surplus pane off a wall is the
+        // tidying this feature exists for. That asymmetry is real. Answering it
+        // with a permanent veto is what is wrong: a new tab nobody named and
+        // nobody used is precisely what `ephemeral=1` was invented for, and a
+        // policy that can never reap one only tidies walls, which is half the
+        // issue. So the difference in kind becomes a difference in degree.
         let tabMates = sessions.filter { $0.tab == session.tab && $0.name != session.name }
-        if tabMates.isEmpty { return .keep("the only pane in its tab") }
+        let solo = tabMates.isEmpty
+        let scale = solo ? thresholds.soloMultiplier : 1
 
         // Age, and the two ways of not knowing it. Unknown is not young and it
         // is not old; it is a fact we failed to gather, and a reaper that
@@ -179,16 +185,16 @@ enum ReapPolicy {
         // changes its output format.
         guard let created = session.createdAt else { return .keep("age unknown") }
         let age = now.timeIntervalSince(created)
-        if age < thresholds.minimumAge {
-            return .keep("only \(hours(age)) old")
+        if age < thresholds.minimumAge * scale {
+            return .keep(solo ? "the only pane in its tab, and only \(hours(age)) old" : "only \(hours(age)) old")
         }
 
         // …and silence. Age alone would reap the pane you opened this morning,
         // left running a long build in, and came back to after lunch.
         guard let touched = facts.lastActivity else { return .keep("last activity unknown") }
         let quiet = now.timeIntervalSince(touched)
-        if quiet < thresholds.minimumQuiet {
-            return .keep("active \(hours(quiet)) ago")
+        if quiet < thresholds.minimumQuiet * scale {
+            return .keep(solo ? "the only pane in its tab, and active \(hours(quiet)) ago" : "active \(hours(quiet)) ago")
         }
 
         return .reap

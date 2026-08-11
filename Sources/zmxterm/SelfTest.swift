@@ -366,17 +366,26 @@ enum SelfTest {
         ]
         expect("the live machine loses nothing",
                ReapPolicy.reapable(from: liveMachine, facts: liveFacts, now: observed).joined(separator: ", "), "")
-        // …and not because the clock happened to be kind. Run the same list a
-        // month later, with nothing having been touched since: still nothing,
-        // because every one of those sessions is held by a signal that has
-        // nothing to do with age.
+        // …and mostly not because the clock happened to be kind. Run the same
+        // list a month later with nothing touched since, and every session held
+        // by a signal that has nothing to do with age is still held. The single
+        // exception is zaphod, and it is the point of the feature rather than a
+        // miss — see below.
         let muchLater = observed.addingTimeInterval(30 * 24 * 60 * 60)
-        expect("…and still loses nothing a month later",
-               ReapPolicy.reapable(from: liveMachine, facts: liveFacts, now: muchLater).joined(separator: ", "), "")
+        expect("…and a month later loses only the abandoned scratch tab",
+               ReapPolicy.reapable(from: liveMachine, facts: liveFacts, now: muchLater).joined(separator: ", "), "zaphod")
         expect("ford is held by its attached client",
                why(liveMachine[1], among: liveMachine, liveFacts["ford"]!, muchLater), "1 client(s) attached")
-        expect("zaphod is held by being a whole tab",
-               why(liveMachine[8], among: liveMachine, liveFacts["zaphod"]!, muchLater), "the only pane in its tab")
+        // zaphod is the honest exception, and worth stating rather than
+        // hiding: ephemeral, nobody attached, unnamed, running a bare shell,
+        // alone in a tab it got from the placeholder name generator. It is what
+        // this feature is for, so a month of silence does reach it — which is
+        // why the check above is scoped to "not today" rather than "never".
+        expect("zaphod is held today by being young and quiet",
+               why(liveMachine[8], among: liveMachine, liveFacts["zaphod"]!, observed).hasPrefix("the only pane in its tab") ? "held" : "reapable",
+               "held")
+        expect("but a whole month of silence does reach it",
+               why(liveMachine[8], among: liveMachine, liveFacts["zaphod"]!, muchLater), "reapable")
 
         // A synthetic wall to test the vetoes one at a time: an orchestrator
         // pane somebody named, and beside it a scratch pane opened yesterday,
@@ -417,8 +426,17 @@ enum SelfTest {
                why(borrowed, among: [orc, borrowed, fixture("spike.orc", clients: 1, created: yesterday, labels: ["tab": "spike"])],
                    abandoned, clock),
                "gathered into spike")
-        expect("the last pane of a tab vetoes",
-               why(scratch(), among: [scratch()], abandoned, clock), "the only pane in its tab")
+        // The last pane of a tab waits fourteen times as long rather than
+        // forever: thirteen hours of silence takes a surplus pane off a wall
+        // and leaves a lone one alone, a week of it takes either.
+        expect("the last pane of a tab is not yet old enough",
+               why(scratch(), among: [scratch()], abandoned, clock),
+               "the only pane in its tab, and only 13.0h old")
+        let aWeekOn = clock.addingTimeInterval(8 * 24 * 60 * 60)
+        expect("but the last pane of a tab is not immune",
+               why(scratch(), among: [scratch()],
+                   facts(nil, clock.addingTimeInterval(-8 * 24 * 60 * 60)), aWeekOn),
+               "reapable")
 
         // Not knowing is not permission.
         expect("an unknown creation time vetoes", verdictOfScratch(scratch(created: nil)), "age unknown")

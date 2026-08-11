@@ -115,10 +115,17 @@ swift run zmxterm --selftest    # prints the verdict for every live session firs
 `ephemeral=1` with nobody attached only makes a pane a candidate. It is then
 kept by any of: a `title`, a `state`, a label this build does not recognise,
 anything running in it that isn't its own login shell, a `tab` label placing it
-in someone else's wall, being the last pane of its tab, being younger than
-twelve hours, or a terminal that has moved in the last twelve hours. Everything
-unknown — no `created` field, no readable tty — keeps the pane too, so a `ps`
-that fails means nothing is reaped rather than everything.
+in someone else's wall, being younger than twelve hours, or a terminal that has
+moved in the last twelve hours. Everything unknown — no `created` field, no
+readable tty — keeps the pane too, so a `ps` that fails means nothing is reaped
+rather than everything.
+
+The last pane of a tab waits fourteen times as long, a week rather than half a
+day. Taking it takes the whole tab, and a tab is a place you navigate to by
+name rather than a slot in a layout — but that is a difference of degree, not a
+reason for immunity. A tab nobody named and nobody used is the exact thing
+`ephemeral=1` marks, so a policy that could never reap one would only ever tidy
+walls.
 
 Note what the age test is and is not. zmx has no "last touched" field, and the
 session's socket does not have one either: a unix socket's mtime is set when it
