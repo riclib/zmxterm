@@ -86,6 +86,20 @@ else
     echo "── no signing identity at all; leaving the bundle unsigned"
 fi
 
+# Notarise the app before the DMG is built, and staple the ticket to the app
+# itself. A ticket on only the disk image is enough for Gatekeeper the first
+# time, but once someone drags the app to /Applications and the DMG is gone,
+# an offline machine has nothing local to check against. Stapling both means
+# neither copy ever needs the network.
+if [ -n "${NOTARY_PROFILE:-}" ]; then
+    echo "── notarising the app"
+    ditto -c -k --keepParent "$BUILD/$APP" "$BUILD/zmxterm-app.zip"
+    xcrun notarytool submit "$BUILD/zmxterm-app.zip" \
+        --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$BUILD/$APP"
+    rm -f "$BUILD/zmxterm-app.zip"
+fi
+
 echo "── building DMG"
 DMG="$BUILD/zmxterm-$VERSION.dmg"
 STAGE="$BUILD/dmg"
@@ -97,10 +111,11 @@ hdiutil create -volname "zmxterm $VERSION" -srcfolder "$STAGE" \
 rm -rf "$STAGE"
 
 if [ -n "${NOTARY_PROFILE:-}" ]; then
-    echo "── notarising"
+    echo "── notarising the DMG"
     xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$DMG"
     xcrun stapler validate "$DMG"
+    spctl -a -vv "$BUILD/$APP"
 fi
 
 echo "── done: $DMG"
