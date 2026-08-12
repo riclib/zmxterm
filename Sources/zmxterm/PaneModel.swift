@@ -19,6 +19,15 @@ final class PaneModel: ObservableObject {
     private var session: InMemoryTerminalSession!
     private var didAttach = false
     private var pendingResize: DispatchWorkItem?
+    /// The surface the daemon's last screen send was aimed at.
+    ///
+    /// Weak on purpose. A tab switch throws the surface away and builds a new
+    /// one, and nothing tells the model that happened — but the reference
+    /// empties itself when the old surface is released, so "is this the surface
+    /// I last painted into" needs no teardown callback to be right. Comparing
+    /// bare identities would not do: a freed surface's address can come back on
+    /// the next allocation, and a recycled address would read as unchanged.
+    private weak var paintedSurface: TerminalSurface?
 
     init(sessionName: String) {
         self.sessionName = sessionName
@@ -57,6 +66,10 @@ final class PaneModel: ObservableObject {
     /// first viewport a pane sees can be a sliver — 12 columns before it lands
     /// on 99. Every one of those would be a real `.Resize` reflowing the session
     /// for every other client watching it, so coalesce and apply the last.
+    ///
+    /// A rebuilt pane settles the same way: three viewports on a tab switch,
+    /// the middle one a sliver. Coalescing them is what makes the repaint below
+    /// run once on the size the pane actually ended up at.
     private func scheduleResize(_ size: ZmxResize) {
         pendingResize?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.attachOrResize(size) }
@@ -71,6 +84,9 @@ final class PaneModel: ObservableObject {
 
         guard didAttach else {
             didAttach = true
+            // An attach replays the screen by itself, so the surface this one
+            // laid out on is already painted.
+            paintedSurface = terminal.surface
             do {
                 try client.attach(size: size)
                 isAttached = true
@@ -79,13 +95,29 @@ final class PaneModel: ObservableObject {
             }
             return
         }
-        client.resize(size)
-    }
 
-    /// Repaint a surface that was destroyed and rebuilt — switching tabs does
-    /// exactly that, while the client underneath stays attached.
-    func repaintIfAttached() {
-        guard didAttach else { return }
+        // Unconditional but self-cancelling: the client drops a resize that
+        // matches the size it last sent, which is every resize a tab switch
+        // produces. It matters on the rare rebuild that *is* a different size —
+        // the window was resized while this tab was hidden — because the
+        // repaint below replays at whatever size the daemon last heard.
+        client.resize(size)
+
+        // Everything past here is the rebuild case. A tab switch destroys the
+        // surface and builds a new one while the client stays attached, and
+        // `InMemoryTerminalSession` does not buffer: output that arrived while
+        // there was no surface was written nowhere, not queued. So the pane
+        // comes back empty and only asking the daemon to send the screen again
+        // fills it.
+        //
+        // Asking has to wait for the new surface to be bound, which is why this
+        // lives here rather than in the view's `onAppear` — a repaint fired
+        // from `onAppear` runs before the representable has made a surface, and
+        // the replay it triggers is dropped exactly like the output was. This
+        // is the first place that runs afterwards: a rebuilt view reports a
+        // viewport, and that report is what carries the new surface.
+        guard let surface = terminal.surface, surface !== paintedSurface else { return }
+        paintedSurface = surface
         Log.debug("repaint \(sessionName)")
         client.repaint()
     }
