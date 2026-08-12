@@ -639,10 +639,12 @@ struct PaneSurfaceView: View {
         // `isFocused` comes from the surface's own delegate and needs no
         // binding at all.
         //
-        // Nothing here repaints a rebuilt surface, and deliberately: `onAppear`
-        // runs before the representable has made one, so the replay it asked
-        // for landed on nothing. `PaneModel` does it off the new surface's
-        // first viewport instead.
+        // Repainting a rebuilt surface happens off its first viewport report,
+        // inside `PaneModel` — `onAppear` runs before the representable has
+        // made a surface, so a replay asked for here would land on nothing.
+        // This asks anyway, late and idempotently, because a report is not
+        // guaranteed to arrive at all; `repaintAfterRebuild` explains when.
+        .onAppear { model.repaintAfterRebuild() }
         .onReceive(model.terminal.$isFocused) { focused in
             guard focused else { return }
             onFocus?(session.name)

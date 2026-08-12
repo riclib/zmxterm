@@ -116,10 +116,39 @@ final class PaneModel: ObservableObject {
         // the replay it triggers is dropped exactly like the output was. This
         // is the first place that runs afterwards: a rebuilt view reports a
         // viewport, and that report is what carries the new surface.
-        guard let surface = terminal.surface, surface !== paintedSurface else { return }
+        repaintIfRebuilt()
+    }
+
+    /// Ask the daemon for the screen again if this pane is looking at a surface
+    /// nothing has painted into yet. Idempotent: it records what it painted, so
+    /// calling it from two places cannot replay twice.
+    private func repaintIfRebuilt() {
+        guard didAttach, let surface = terminal.surface, surface !== paintedSurface else { return }
         paintedSurface = surface
         Log.debug("repaint \(sessionName)")
         client.repaint()
+    }
+
+    /// The second way in, and the reason the first is not enough.
+    ///
+    /// `attachOrResize` only runs when a viewport report reaches it, and
+    /// `InMemoryTerminalSession` drops a report identical to the last one it
+    /// saw — a check that survives the surface being replaced, because
+    /// `setSurface` does not reset it. A rebuild that happens to lay out in one
+    /// pass at exactly the previous geometry therefore reports nothing, and a
+    /// pane whose only trigger was that report would stay blank. Two panes
+    /// settling over three passes always differ somewhere, which is why this
+    /// was not seen; one pane alone in a tab, switched to another tab of the
+    /// same shape, is the case that would.
+    ///
+    /// So the view also asks on appear — but after the debounce window, not
+    /// during it. Firing immediately is the original bug: `onAppear` runs
+    /// before the representable has made a surface, and the replay it asks for
+    /// is dropped exactly like the output was.
+    func repaintAfterRebuild() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.repaintIfRebuilt()
+        }
     }
 
     func detach() {
