@@ -81,10 +81,24 @@ enum Reader {
     /// `plan` would compare that to what `ps` reports, conclude a stranger was
     /// running in the reader, and refuse to open anything.
     static func viewer(of command: String) -> String {
+        (executable(of: command) as NSString).lastPathComponent
+    }
+
+    /// The executable *as written*, before it is reduced to a basename.
+    ///
+    /// The distinction only shows up when someone configures a viewer by path.
+    /// `viewer` is deliberately the basename, because that is what `ps` reports
+    /// and matching a running process is what it is for — but that makes it the
+    /// wrong thing to ask "is this installed" about. Asked of `viewer`, a
+    /// configured `/Users/me/bin/mdv` becomes `mdv` and gets looked up on the
+    /// PATH: it can report missing while the configured file is right there,
+    /// or report present because a *different* `mdv` is on the PATH. Two
+    /// questions, two functions.
+    static func executable(of command: String) -> String {
         for word in command.split(separator: " ", omittingEmptySubsequences: true) {
             // An assignment is `NAME=…` with nothing path-like before the `=`.
             if let equals = word.firstIndex(of: "="), !word[..<equals].contains("/") { continue }
-            return (String(word) as NSString).lastPathComponent
+            return String(word)
         }
         return ""
     }
@@ -160,24 +174,57 @@ enum Reader {
 
     // MARK: - Is the viewer even there
 
-    /// Asked of the *login shell*, because that is the PATH the pane will have
-    /// and it is not this app's.
+    /// The PATH a pane will actually have, asked of the shell once.
     ///
     /// A GUI process inherits no login environment — the same fact that makes
-    /// `Zmx.executable` a list of candidate paths — so `mdv` installed in
+    /// `Zmx.executable` a list of candidate paths — so a viewer in
     /// `~/.local/bin` is invisible to us and perfectly visible to the session.
     /// Asking the shell is the only answer that matches what will happen.
-    /// Measured at ~35ms with a `zsh -lc`, which is why it can sit on the main
-    /// thread inside a menu action rather than needing to be hoisted off it.
+    ///
+    /// **It has to be an *interactive* login shell, and that is the whole bug
+    /// this replaced.** `zsh -lc` is a login shell that is not interactive, so
+    /// it reads `.zprofile` and skips `.zshrc` — and `.zshrc` is where a great
+    /// many people, including the author, actually build their PATH. The check
+    /// reported `mdv` missing while the pane it was about to create could run
+    /// it, because `zmx attach` spawns a login shell **on a pty**, which is
+    /// interactive and does read `.zshrc`. Modelling the pane's shell means
+    /// matching both flags, not one.
+    ///
+    /// Resolved once and cached, because an interactive shell is not cheap:
+    /// ~525ms here against ~35ms for the non-interactive one, most of it
+    /// somebody's prompt framework. Once, lazily, is affordable; per viewer per
+    /// menu action would not be — which matters for #25, where a rule list
+    /// names several viewers and each would otherwise pay.
+    static let loginPath: [String] = {
+        let shell = ShellIntegration.loginShell()
+        // `-i` as well as `-l`; see above. `printf` rather than `echo` so a
+        // PATH containing a backslash survives.
+        let raw = ForegroundProcess.shell(shell, ["-ilc", #"printf %s "$PATH""#])
+        let entries = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":").map(String.init).filter { !$0.isEmpty }
+        Log.debug("login PATH: \(entries.count) entries via \(shell)")
+        // A shell that answered nothing leaves us worse off than the
+        // environment we already have, so fall back rather than resolving
+        // nothing at all.
+        guard !entries.isEmpty else {
+            return (ProcessInfo.processInfo.environment["PATH"] ?? "")
+                .split(separator: ":").map(String.init)
+        }
+        return entries
+    }()
+
     static func isInstalled(_ configuration: Configuration,
-                            shell: String = ShellIntegration.loginShell()) -> Bool
+                            searching path: [String] = Reader.loginPath) -> Bool
     {
-        let viewer = configuration.viewer
-        guard !viewer.isEmpty else { return false }
+        // The executable as written, not the basename `viewer` reduces it to —
+        // see `executable(of:)` for why those are different questions.
+        let named = executable(of: configuration.command)
+        guard !named.isEmpty else { return false }
         // A configured path is checkable without asking anybody.
-        if viewer.contains("/") { return FileManager.default.isExecutableFile(atPath: viewer) }
-        let found = ForegroundProcess.shell(shell, ["-lc", "command -v -- " + FileTree.shellQuoted(viewer)])
-        return !found.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if named.contains("/") { return FileManager.default.isExecutableFile(atPath: named) }
+        return path.contains {
+            FileManager.default.isExecutableFile(atPath: $0 + "/" + named)
+        }
     }
 
     // MARK: - Timings

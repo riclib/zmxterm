@@ -901,6 +901,32 @@ enum SelfTest {
             + "quit \(effective.quitKey.isEmpty ? "<signal only>" : effective.quitKey), "
             + "installed \(flag(Reader.isInstalled(effective)))")
 
+        // Searching a path list is pure, so the part that decides "is it there"
+        // is checkable without a shell at all.
+        let bin = FileManager.default.temporaryDirectory.appendingPathComponent("zmxterm-selftest-bin")
+        try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let fake = bin.appendingPathComponent("pretend-viewer")
+        FileManager.default.createFile(atPath: fake.path, contents: Data("#!/bin/sh\n".utf8),
+                                       attributes: [.posixPermissions: 0o755])
+        expect("a viewer on the searched path is found",
+               flag(Reader.isInstalled(.init(command: "pretend-viewer", quitKey: "q"), searching: [bin.path])), "yes")
+        expect("and is not found when that directory is not searched",
+               flag(Reader.isInstalled(.init(command: "pretend-viewer", quitKey: "q"), searching: ["/usr/bin"])), "no")
+        expect("an absolute viewer skips the path entirely",
+               flag(Reader.isInstalled(.init(command: fake.path, quitKey: "q"), searching: [])), "yes")
+        expect("a non-executable file is not a viewer",
+               flag(Reader.isInstalled(.init(command: "/etc/hosts", quitKey: "q"), searching: [])), "no")
+        try? FileManager.default.removeItem(at: bin)
+
+        // The login PATH itself depends on the machine, so it reports. It is
+        // worth printing because the bug it replaced was invisible from a
+        // terminal: `zsh -lc` skips `.zshrc`, so a viewer installed somewhere
+        // `.zshrc` adds to PATH read as missing to the app and present to
+        // everyone testing by hand. Run this under `env -i HOME=$HOME
+        // USER=$USER` to see what a Dock launch sees.
+        print("note login PATH: \(Reader.loginPath.count) entries"
+            + (Reader.loginPath.isEmpty ? "" : ", first \(Reader.loginPath.prefix(3).joined(separator: ":"))"))
+
         // The round trip itself, which needs a daemon and so reports rather
         // than fails — the layout above was read off exactly these bytes, and
         // the cheapest way to notice a zmx release moving a field is to see the
