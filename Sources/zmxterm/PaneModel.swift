@@ -156,6 +156,18 @@ final class PaneModel: ObservableObject {
         isAttached = false
     }
 
+    /// Put text in the session as though it had been typed.
+    ///
+    /// The bytes go down the same `.input` frame the surface's own keystrokes
+    /// use, so the daemon cannot tell the two apart and every other client
+    /// watching the session sees it echoed like anything else. Nothing here
+    /// appends a newline, and no caller should: the file tree inserts a path
+    /// for a person to finish, it does not run commands on their behalf.
+    func insert(_ text: String) {
+        guard !text.isEmpty else { return }
+        client.send(.input, Data(text.utf8))
+    }
+
     /// The visible grid as text — the basis for ⌘K search over panes you aren't
     /// looking at. `zmx history` covers scrollback; this covers the viewport.
     func viewportText() -> String? {

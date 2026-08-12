@@ -687,6 +687,87 @@ enum SelfTest {
         // Clocks move backwards across a daemon restart; only forward is news.
         expect("a stamp going backwards is not a completion", flags(nil, 7, 100, 200), "-")
 
+        // Where the file tree roots. The whole feature rests on this being
+        // decidable from two strings, one of which is usually absent.
+        func root(_ workingDirectory: String?, _ startDir: String?) -> String {
+            FileTree.rootPath(workingDirectory: workingDirectory, startDir: startDir) ?? "<none>"
+        }
+        expect("a live pwd outranks where the session started", root("/tmp/live", "/tmp/start"), "/tmp/live")
+        expect("a pane that has never reported falls back", root(nil, "/tmp/start"), "/tmp/start")
+        // A session whose shell has no integration reports nothing forever, and
+        // an empty string is that, not a directory called "".
+        expect("an empty pwd is not a directory", root("", "/tmp/start"), "/tmp/start")
+        expect("no focused pane, nothing to show", root(nil, nil), "<none>")
+        // OSC 7 carries a URL. libghostty hands over the path, but a shell that
+        // emits something odder must not put a scheme in the header.
+        expect("a file URL is unwrapped and unescaped", root("file:///tmp/two%20words", nil), "/tmp/two words")
+        // Resolving it against *this* process's directory would be a lie about
+        // the pane's.
+        expect("a relative pwd is refused, not resolved", root("envs/zmxterm", "/tmp/start"), "/tmp/start")
+        expect("a trailing slash is not a different directory", root("/tmp/live/", nil), "/tmp/live")
+
+        // Ordering. Dotfiles are in: this is a terminal, and a tree that hides
+        // .gitignore is lying about the directory.
+        expect(
+            "directories first, then case-insensitively",
+            names([("b.txt", false), ("Alpha", false), (".git", true), ("zdir", true), ("a.txt", false)]),
+            ".git zdir a.txt Alpha b.txt"
+        )
+        expect("names differing only in case keep a fixed order",
+               names([("readme", false), ("README", false)]), "README readme")
+
+        // Path → text to insert. Both this and #13's Finder drop go through it,
+        // so the same file has to arrive as the same string either way.
+        func insertion(_ path: String, _ cwd: String?) -> String {
+            FileTree.insertion(for: path, relativeTo: cwd)
+        }
+        expect("a file under the pane's directory is relative", insertion("/tmp/a/b.txt", "/tmp/a"), "b.txt ")
+        expect("and stays relative further down", insertion("/tmp/a/sub/b.txt", "/tmp/a"), "sub/b.txt ")
+        expect("a file outside it is absolute", insertion("/etc/hosts", "/tmp/a"), "/etc/hosts ")
+        // The prefix test is on a path component, not on characters: /tmp/apple
+        // is not inside /tmp/a.
+        expect("a sibling sharing a prefix is not inside", insertion("/tmp/apple/x", "/tmp/a"), "/tmp/apple/x ")
+        expect("the directory itself is .", insertion("/tmp/a", "/tmp/a"), ". ")
+        expect("with no directory to compare against, absolute", insertion("/tmp/a/b.txt", nil), "/tmp/a/b.txt ")
+        expect("a space is quoted", insertion("/tmp/a/two words.txt", "/tmp/a"), "'two words.txt' ")
+        // A single quote cannot appear inside single quotes; it is closed,
+        // escaped, reopened.
+        expect("a quote is quoted", insertion("/tmp/a/it's.txt", "/tmp/a"), "'it'\\''s.txt' ")
+        expect("a leading tilde is quoted rather than left to expand",
+               insertion("/tmp/a/~backup", "/tmp/a"), "'~backup' ")
+        // Nothing is executed by inserting a path, and the trailing space is
+        // what lets a second one follow.
+        expect("nothing inserted ends a line",
+               insertion("/tmp/a/b.txt", "/tmp/a").contains("\n") ? "newline" : "none", "none")
+
+        // Which rows are on screen. Lazily loaded means "expanded" and "listed"
+        // are different states, and both are visible here.
+        let treeRoot = FileEntry(path: "/r", name: "r", isDirectory: true)
+        let listed: [String: [FileEntry]] = [
+            "/r": [
+                FileEntry(path: "/r/d", name: "d", isDirectory: true),
+                FileEntry(path: "/r/slow", name: "slow", isDirectory: true),
+                // A link back to the root: expanding it would produce an
+                // infinite tree one click at a time.
+                FileEntry(path: "/r/loop", name: "loop", isDirectory: true, resolvedPath: "/r"),
+                FileEntry(path: "/r/f.txt", name: "f.txt", isDirectory: false),
+            ],
+            "/r/d": [FileEntry(path: "/r/d/x.txt", name: "x.txt", isDirectory: false)],
+            "/r/loop": [FileEntry(path: "/r/loop/d", name: "d", isDirectory: true)],
+        ]
+        expect("a closed tree is one level",
+               rowShape(FileTree.rows(root: treeRoot, children: listed, expanded: [])),
+               "d0 slow0 loop0! f.txt0")
+        expect("an open folder brings its children with it",
+               rowShape(FileTree.rows(root: treeRoot, children: listed, expanded: ["/r/d"])),
+               "d0* x.txt1 slow0 loop0! f.txt0")
+        expect("a folder opened before its listing arrives says so",
+               rowShape(FileTree.rows(root: treeRoot, children: listed, expanded: ["/r/slow"])),
+               "d0 slow0… loop0! f.txt0")
+        expect("a symlink loop is shown and not descended",
+               rowShape(FileTree.rows(root: treeRoot, children: listed, expanded: ["/r/loop"])),
+               "d0 slow0 loop0! f.txt0")
+
         // The round trip itself, which needs a daemon and so reports rather
         // than fails — the layout above was read off exactly these bytes, and
         // the cheapest way to notice a zmx release moving a field is to see the
@@ -781,6 +862,26 @@ enum SelfTest {
 
     private static func session(_ name: String) -> ZmxSession {
         ZmxSession(name: name, pid: "1", clients: 1, startDir: "/tmp", command: "zsh", labels: [:])
+    }
+
+    /// A directory listing as names in the order the tree would draw them.
+    private static func names(_ specs: [(String, Bool)]) -> String {
+        FileTree.sorted(specs.map { name, isDirectory in
+            FileEntry(path: "/r/" + name, name: name, isDirectory: isDirectory)
+        }).map(\.name).joined(separator: " ")
+    }
+
+    /// The visible tree in one line: name, depth, and what the disclosure is
+    /// doing — `*` open, `…` open but still reading, `!` a directory that
+    /// refuses to open because it links back into itself.
+    private static func rowShape(_ rows: [FileRow]) -> String {
+        rows.map { row in
+            let mark = if row.isLoading { "…" }
+            else if row.isExpanded { "*" }
+            else if row.entry.isDirectory, !row.canExpand { "!" }
+            else { "" }
+            return "\(row.entry.name)\(row.depth)\(mark)"
+        }.joined(separator: " ")
     }
 
     private static func iconAsset(command: String, dir: String = "/tmp") -> String {

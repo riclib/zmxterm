@@ -205,6 +205,39 @@ Background is selection, foreground is state, so the two never collide:
 Colour is spent on state, so identity in the rail is glyph shape alone — the
 icons have to read in monochrome.
 
+## The inspector
+
+⌥⌘B collapses the right sidebar the way ⌘B collapses the left, and to a strip of
+icons for the same reason. It holds panels about whatever the focused pane is
+looking at — one so far — so the container is an enum of panels and a `switch`,
+and the next one is a case rather than a rewrite.
+
+The file tree roots at the focused pane's working directory and follows it.
+Nothing polls: `TerminalViewState.workingDirectory` is `@Published` and
+libghostty raises it on OSC 7, so a `cd` in the pane is an update in the
+sidebar and there is no `pwd` probe anywhere in this app. A session created
+outside it, by a shell with no integration, never reports one — that tree shows
+`start_dir`, which zmx recorded when the session was made. Showing where a pane
+started is worse than showing where it is, and much better than showing nothing.
+
+Directories are read one level per expansion and never on the main thread: a
+tree rooted on a network mount must not be able to stop the terminal from
+drawing. Expansion resets when the root moves, there is no pinning, and there is
+no filesystem watcher — a file created in the pane appears when you press
+refresh.
+
+Double-clicking a row types its path into the pane. No newline, one trailing
+space, relative when the file is underneath the pane's directory and absolute
+when it is not, single quoted when it holds anything a shell would read.
+Inserting is deliberately not executing. The rule is `FileTree.insertion` and it
+sits apart from the gesture, because dropping files from Finder has to produce
+the same string.
+
+None of what is open is session state, which is the one rule: it describes a
+filesystem, `zsm` has no opinion about it, and it is nobody's label. What
+persists is whether the sidebar is open and how wide it is, in `@AppStorage`
+beside `railCollapsed`.
+
 ## Layout and dragging
 
 Pane frames are computed in one pass (`PaneLayout.compute`) rather than by a
@@ -239,6 +272,8 @@ PaneTree.swift      `pos` labels → split tree
 PaneLayout.swift    tree → frames, in one pass; divider drag math
 PaneModel.swift     a surface bound to a session; PaneStore caches them
 Views.swift         sidebar, rail, split canvas, pane chrome
+FileTree.swift      where the tree roots, listing order, visible rows, path → text
+InspectorView.swift the right sidebar, its panels, and the file tree's views
 ReapPolicy.swift    which scratch panes are safe to destroy; the launch pass
 SelfTest.swift      headless tree and drag tests
 bin/zmx-state       the attention hook

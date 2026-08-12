@@ -190,6 +190,13 @@ struct RootView: View {
     @State private var selectedTab: String?
     @State private var selectedPane: String?
     @AppStorage("railCollapsed") private var isRailCollapsed = false
+    /// The right sidebar, stored exactly like the rail beside it. Whether a
+    /// panel is open, how wide it is and which one it shows are preferences
+    /// about this window — they say nothing about any zmx session, so they are
+    /// none of `zsm`'s business and none of a label's.
+    @AppStorage("inspectorCollapsed") private var isInspectorCollapsed = false
+    @AppStorage("inspectorWidth") private var inspectorWidth = 260.0
+    @AppStorage("inspectorPanel") private var inspectorPanel = InspectorPanel.files.rawValue
     /// Acknowledging is a destructive write to someone else's session, so it
     /// waits for the window to settle. SwiftUI hands out initial focus while
     /// the app is still inactive, and clearing an agent's `waiting` because a
@@ -242,6 +249,20 @@ struct RootView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider()
+
+            InspectorView(
+                pane: focusedPane,
+                // Asking the store for the focused pane's model creates nothing
+                // new: it is a pane of the tab being rendered, so the split
+                // canvas has already asked for the same object.
+                model: focusedPane.map { store.model(for: $0.name) },
+                collapsed: $isInspectorCollapsed,
+                width: $inspectorWidth,
+                panel: $inspectorPanel
+            )
+            .frame(width: isInspectorCollapsed ? InspectorView.collapsedWidth : inspectorWidth)
         }
         .background(Theme.chrome)
         .environmentObject(store)
@@ -365,6 +386,9 @@ struct RootView: View {
             Group {
                 Button("") { isRailCollapsed.toggle() }
                     .keyboardShortcut("b", modifiers: .command)
+                // ⌥⌘B for the other side, because it is the same thought.
+                Button("") { isInspectorCollapsed.toggle() }
+                    .keyboardShortcut("b", modifiers: [.command, .option])
                 // ⇧⌘, is Ghostty's own reload binding.
                 Button("") { TerminalConfig.reload() }
                     .keyboardShortcut(",", modifiers: [.command, .shift])
@@ -435,6 +459,18 @@ struct RootView: View {
 
     private var resolvedTab: (name: String, panes: [ZmxSession])? {
         registry.tabs.first { $0.name == selectedTab }
+    }
+
+    /// The pane anything on the right is about.
+    ///
+    /// Restricted to the visible tab on purpose: `selectedPane` can name a pane
+    /// in a tab you have since switched away from, and a file tree following a
+    /// pane nobody can see would be worse than one following nothing. A tab
+    /// with panes but no selection falls back to its first, which is the pane
+    /// the keyboard would go to anyway.
+    private var focusedPane: ZmxSession? {
+        guard let tab = resolvedTab else { return nil }
+        return tab.panes.first { $0.name == selectedPane } ?? tab.panes.first
     }
 }
 
