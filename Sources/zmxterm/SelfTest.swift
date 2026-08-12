@@ -824,47 +824,152 @@ enum SelfTest {
 
         // The reader. Everything that decides what gets typed into somebody's
         // shell is a pure function, which is the only way to argue about it
-        // without a viewer installed and a document open.
-        let mdv = Reader.Configuration.default
-        expect("the default viewer", mdv.viewer, "mdv")
-        expect("a configured viewer with arguments",
-               Reader.Configuration(command: "glow -p", quitKey: "q").viewer, "glow")
+        // without a viewer installed and a document open. Since #25 that starts
+        // one step earlier: which rule the file picked is a pure function too,
+        // of the path and a predicate saying what is installed.
+
+        // The list from the ticket, parsed exactly as written.
+        let example = Reader.parse("""
+        # what I read things with
+        *.md              mdv --watch {path}
+        *.log *.jsonl     tail -f {path} | humanlog
+        *                 bat --paging=always {path}
+        """)
+        expect("a viewer list is read line by line", "\(example.rules.count)", "3")
+        expect("comments and blanks are not rules", example.problem ?? "<none>", "<none>")
+        expect("a rule can name several patterns",
+               example.rules[1].patterns.joined(separator: " "), "*.log *.jsonl")
+        expect("the command is everything after the gap",
+               example.rules[1].command, "tail -f {path} | humanlog")
+        // The gap is the delimiter, so a command keeps its own single spaces.
+        // With no gap at all the first word is the pattern, because a rule that
+        // silently did nothing because someone typed one space is a bad trade.
+        expect("a single-spaced rule is still a rule",
+               Reader.parse("*.md mdv --watch {path}").rules.first?.command ?? "<none>",
+               "mdv --watch {path}")
+        expect("a tab separates as well as a gap",
+               Reader.parse("*.md\tmdv --watch {path}").rules.first?.command ?? "<none>",
+               "mdv --watch {path}")
+
+        // First match wins, and a later rule never shadows an earlier one.
+        let installed: (Reader.Rule) -> Bool = { _ in true }
+        expect("the first matching rule wins",
+               describe(Reader.match(path: "/tmp/a/notes.md", in: example.rules, isInstalled: installed)),
+               "mdv --watch {path}")
+        expect("a later rule does not shadow an earlier one",
+               describe(Reader.match(path: "/tmp/a/run.log", in: example.rules, isInstalled: installed)),
+               "tail -f {path} | humanlog")
+        expect("the unconditional rule catches the rest",
+               describe(Reader.match(path: "/tmp/a/pic.png", in: example.rules, isInstalled: installed)),
+               "bat --paging=always {path}")
+        expect("a name is matched, not a path",
+               describe(Reader.match(path: "/var/log/thing.png", in: example.rules, isInstalled: installed)),
+               "bat --paging=always {path}")
+        expect("case does not decide it",
+               describe(Reader.match(path: "/tmp/a/README.MD", in: example.rules, isInstalled: installed)),
+               "mdv --watch {path}")
+        // A list with no unconditional rule leaves files with nothing to open
+        // them, which is a thing to say rather than a thing to guess at.
+        expect("no rule matching at all is its own answer",
+               describe(Reader.match(path: "/tmp/a/pic.png", in: Array(example.rules.prefix(2)),
+                                     isInstalled: installed)),
+               "<no rule>")
+
+        // **A rule whose viewer is missing falls through to the next match.**
+        // Degrading to a worse viewer beats degrading to nothing.
+        let noMdv: (Reader.Rule) -> Bool = { !$0.executables.contains("mdv") }
+        expect("a missing viewer falls through to the next match",
+               describe(Reader.match(path: "/tmp/a/notes.md", in: example.rules, isInstalled: noMdv)),
+               "bat --paging=always {path}")
+        let nothing: (Reader.Rule) -> Bool = { _ in false }
+        expect("and names everything it tried when none of them is there",
+               describe(Reader.match(path: "/tmp/a/notes.md", in: example.rules, isInstalled: nothing)),
+               "missing mdv, bat")
+        // A pipeline is only usable if both halves are: checking the first would
+        // open a pane onto `humanlog: command not found`.
+        expect("a pipeline names every binary it needs",
+               example.rules[1].executables.joined(separator: " "), "tail humanlog")
+
+        // {path} is a placeholder, not an append — a `tail -f {path} | humanlog`
+        // has nowhere sensible to put a file at the end of the line.
+        let mdv = example.rules[0]
+        expect("a document goes where the rule says",
+               mdv.commandLine(opening: "/tmp/a/notes.md"), "mdv --watch /tmp/a/notes.md")
+        expect("a path with a space survives quoted",
+               mdv.commandLine(opening: "/tmp/a/two words.md"), "mdv --watch '/tmp/a/two words.md'")
+        expect("{path} twice is substituted twice",
+               Reader.Rule(patterns: ["*"], command: "diff {path} {path}")
+                   .commandLine(opening: "/tmp/a/two words.md"),
+               "diff '/tmp/a/two words.md' '/tmp/a/two words.md'")
+        // #20's readerCommand was "everything before the path", and a rule
+        // written that way still means what its author meant.
+        expect("a rule with no placeholder gets the path appended",
+               Reader.Rule(patterns: ["*"], command: "glow -p").commandLine(opening: "/tmp/a/notes.md"),
+               "glow -p /tmp/a/notes.md")
+
+        // The stop key belongs to the rule: `q` quits mdv and bat's pager, and a
+        // tail stops for nothing but ^C.
+        expect("a rule stops with q unless it says otherwise", mdv.quitKey, "q")
+        let tail = Reader.parse("*.log  quit=^C  tail -f {path}").rules[0]
+        expect("caret notation becomes the byte", visible(tail.quitKey), "^C")
+        expect("and the option is not part of the command", tail.command, "tail -f {path}")
+        expect("an empty stop key is honoured rather than replaced",
+               "[" + Reader.parse("*.log  quit=  tail -f {path}").rules[0].quitKey + "]", "[]")
+        // The #22 workaround is a plausible thing to configure, and it is an
+        // assignment for the shell rather than an option for us.
+        let kitty = Reader.parse("*.md  TERM=xterm-kitty mdv --watch {path}").rules[0]
+        expect("leading assignments stay in the command",
+               kitty.command, "TERM=xterm-kitty mdv --watch {path}")
+        expect("and are not mistaken for the viewer", kitty.viewer, "mdv")
         expect("a viewer given by path is named by its last component",
-               Reader.Configuration(command: "/usr/local/bin/glow", quitKey: "q").viewer, "glow")
-        // The #22 workaround is a plausible thing to configure, and taking the
-        // first word blindly would name the viewer `TERM=xterm-kitty`.
-        expect("leading assignments are not the viewer",
-               Reader.Configuration(command: "TERM=xterm-kitty mdv --watch", quitKey: "q").viewer, "mdv")
+               Reader.Rule(patterns: ["*"], command: "/usr/local/bin/glow -p").viewer, "glow")
 
-        expect("an unset command falls back",
-               Reader.configuration(command: nil, quitKey: nil).command, "mdv --watch")
-        expect("a blank command falls back too",
-               Reader.configuration(command: "   ", quitKey: nil).command, "mdv --watch")
-        expect("a configured command is taken as written",
-               Reader.configuration(command: "glow -p", quitKey: nil).command, "glow -p")
-        // Blank is a real answer for the quit key — "this viewer has none" —
-        // where blank for the command names nothing that could be run.
-        expect("an empty quit key is honoured rather than replaced",
-               "[" + Reader.configuration(command: nil, quitKey: "").quitKey + "]", "[]")
-
-        expect("a document becomes a command line",
-               Reader.commandLine(mdv, opening: "/tmp/a/notes.md"), "mdv --watch /tmp/a/notes.md")
-        expect("a path with a space is quoted",
-               Reader.commandLine(mdv, opening: "/tmp/a/two words.md"), "mdv --watch '/tmp/a/two words.md'")
-        // ^U kills whatever the quit key left on the prompt; \r is Return.
+        // ^U kills whatever the stop key left on the prompt; \r is Return. This
+        // holds whatever the stop was, which is the point: ^C flushes the tty's
+        // input queue, so the command line is always a later write than the
+        // thing that stopped the last viewer, and always re-clears the line.
         expect("what actually reaches the pty",
                visible(Reader.keystrokes(mdv, opening: "/tmp/a/notes.md")),
                "^U mdv --watch /tmp/a/notes.md CR")
+        expect("a ^C rule still clears the line before typing",
+               visible(Reader.keystrokes(tail, opening: "/tmp/a/run.log")),
+               "^U tail -f /tmp/a/run.log CR")
 
-        expect("an idle reader is typed into", plan(nil), "start")
-        expect("the viewer is quit first", plan("mdv"), "swap")
-        expect("case does not decide it", plan("MDV"), "swap")
-        // The pane is still a shell somebody can use. Typing a quit key and a
-        // command line into a stranger is the one outcome worth refusing.
-        expect("a stranger in the reader is refused", plan("vim"), "busy vim")
-        expect("with no viewer configured nothing is quit",
-               describe(Reader.plan(foreground: "mdv", configuration: .init(command: "", quitKey: "q"))),
-               "busy mdv")
+        // A malformed file loses the line that is wrong and nothing else.
+        // libghostty rejects its whole config over one bad key — see CLAUDE.md,
+        // where it is written down as a failure mode that cost hours.
+        let mixed = Reader.parse("""
+        *.md   mdv --watch {path}
+        *.log
+        *      bat {path}
+        """)
+        expect("a bad line loses itself and not the file", "\(mixed.rules.count)", "2")
+        expect("and the file says which line", mixed.problem?.contains("line 2") == true ? "named" : "vague",
+               "named")
+        // Only a file with nothing usable left in it falls back — and says so.
+        let empty = Reader.load(path: write("""
+        this file is prose
+        so is this
+        """), command: nil, quitKey: nil)
+        expect("a file with no usable rule falls back to the built-ins",
+               "\(empty.rules == Reader.builtin)", "true")
+        expect("and says so", empty.problem?.contains("built-in") == true ? "said" : "silent", "said")
+        expect("a file that parses is the whole list",
+               "\(Reader.load(path: write("*  bat {path}"), command: nil, quitKey: nil).rules.count)", "1")
+        // No file and no defaults: the built-ins, which are themselves parsed
+        // from config text, so a format they cannot express is one the file
+        // cannot either.
+        expect("with no file at all the built-ins stand",
+               "\(Reader.load(path: nil, command: nil, quitKey: nil).rules == Reader.builtin)", "true")
+        expect("every built-in rule runs something",
+               flag(Reader.builtin.allSatisfy { !$0.executables.isEmpty }), "yes")
+        // #20's single viewer was documented and somebody wrote it down.
+        let legacy = Reader.load(path: nil, command: "glow -p", quitKey: "x")
+        expect("a readerCommand still opens everything",
+               describe(Reader.match(path: "/tmp/a/pic.png", in: legacy.rules, isInstalled: installed)),
+               "glow -p")
+        expect("with its own quit key", legacy.rules[0].quitKey, "x")
+        try? FileManager.default.removeItem(at: configFixtures)
 
         // Which pane a document goes to, and the promise that a second document
         // does not build a second reader.
@@ -882,24 +987,52 @@ enum SelfTest {
         expect("reader is a bare flag", flag(readerPanes[1].isReader), "yes")
         expect("and absent means not one", flag(readerPanes[0].isReader), "no")
 
+        // Whether the thing in the reader is ours to stop. This is asked of the
+        // pid we watched start, never of the name: a pipeline is two processes
+        // under one shell and the name that comes back is whichever the scan
+        // reached first, and a tail never exits, so a name-based "still
+        // running?" would refuse the next document forever.
+        expect("an idle reader is typed into", plan(foreground: nil, started: nil), "start")
+        expect("the process we started is ours to stop",
+               plan(foreground: (4242, "humanlog"), started: 4242), "swap")
+        expect("even one that never ends", plan(foreground: (4242, "tail"), started: 4242), "swap")
+        expect("a stranger in the reader is refused",
+               plan(foreground: (99, "vim"), started: 4242), "busy vim")
+        // The memory is in-process. After a restart the viewer still running in
+        // a reader is somebody else's as far as this is concerned, and refusing
+        // is the safe direction to be wrong in.
+        expect("and so is anything we did not watch start",
+               plan(foreground: (4242, "mdv"), started: nil), "busy mdv")
+
         // What the panel says when nothing opened. Each of these is a thing to
         // go and fix, so each has to name it.
         expect("opening reports no problem", Reader.Outcome.opened(pane: "x").problem ?? "<none>", "<none>")
         expect("a busy reader names what is in it",
                Reader.Outcome.busy(pane: "zaphod.shell-2", running: "vim").problem?
                    .contains("running vim") == true ? "named" : "vague", "named")
-        expect("a missing viewer names the defaults key",
-               Reader.Outcome.missingViewer("mdv").problem?
-                   .contains("readerCommand") == true ? "named" : "vague", "named")
+        expect("a missing viewer names what it tried",
+               Reader.Outcome.missingViewer(["mdv", "glow"]).problem?
+                   .contains("mdv, glow") == true ? "named" : "vague", "named")
+        expect("and where the rules live",
+               Reader.Outcome.missingViewer(["mdv"]).problem?
+                   .contains("viewers.conf") == true ? "named" : "vague", "named")
+        expect("an unmatched file names itself, not its path",
+               Reader.Outcome.noRule("/tmp/a/pic.xyz").problem?
+                   .contains("pic.xyz") == true ? "named" : "vague", "named")
 
         // What this build would actually run — the one part of the reader that
         // depends on the machine, so it reports rather than fails. It answers
-        // the two questions a failed Open in Reader raises: which viewer did it
-        // try, and can the login shell find it.
-        let effective = Reader.configuration
-        print("note reader: \(effective.command) → viewer \(effective.viewer), "
-            + "quit \(effective.quitKey.isEmpty ? "<signal only>" : effective.quitKey), "
-            + "installed \(flag(Reader.isInstalled(effective)))")
+        // the question a failed Open in Reader raises: which rules are in force,
+        // and can the login shell find the viewers they name.
+        let effective = Reader.rules
+        print("note reader rules: \(effective.rules.count) from "
+            + (FileManager.default.fileExists(atPath: Reader.configPath) ? Reader.configPath : "built-in defaults"))
+        for rule in effective.rules {
+            print("note   \(rule.patterns.joined(separator: " ")) → \(rule.command)"
+                + " [stop \(rule.quitKey.isEmpty ? "<signal only>" : visible(rule.quitKey))]"
+                + " \(Reader.isInstalled(rule) ? "installed" : "not installed")")
+        }
+        if let problem = effective.problem { print("note   problem: \(problem)") }
 
         // Searching a path list is pure, so the part that decides "is it there"
         // is checkable without a shell at all.
@@ -908,14 +1041,19 @@ enum SelfTest {
         let fake = bin.appendingPathComponent("pretend-viewer")
         FileManager.default.createFile(atPath: fake.path, contents: Data("#!/bin/sh\n".utf8),
                                        attributes: [.posixPermissions: 0o755])
+        func rule(_ command: String) -> Reader.Rule { Reader.Rule(patterns: ["*"], command: command) }
         expect("a viewer on the searched path is found",
-               flag(Reader.isInstalled(.init(command: "pretend-viewer", quitKey: "q"), searching: [bin.path])), "yes")
+               flag(Reader.isInstalled(rule("pretend-viewer"), searching: [bin.path])), "yes")
         expect("and is not found when that directory is not searched",
-               flag(Reader.isInstalled(.init(command: "pretend-viewer", quitKey: "q"), searching: ["/usr/bin"])), "no")
+               flag(Reader.isInstalled(rule("pretend-viewer"), searching: ["/usr/bin"])), "no")
         expect("an absolute viewer skips the path entirely",
-               flag(Reader.isInstalled(.init(command: fake.path, quitKey: "q"), searching: [])), "yes")
+               flag(Reader.isInstalled(rule(fake.path), searching: [])), "yes")
         expect("a non-executable file is not a viewer",
-               flag(Reader.isInstalled(.init(command: "/etc/hosts", quitKey: "q"), searching: [])), "no")
+               flag(Reader.isInstalled(rule("/etc/hosts"), searching: [])), "no")
+        expect("a pipeline needs both halves",
+               flag(Reader.isInstalled(rule("pretend-viewer | nope-viewer"), searching: [bin.path])), "no")
+        expect("and is installed when it has them",
+               flag(Reader.isInstalled(rule("pretend-viewer | pretend-viewer"), searching: [bin.path])), "yes")
         try? FileManager.default.removeItem(at: bin)
 
         // The login PATH itself depends on the machine, so it reports. It is
@@ -970,17 +1108,39 @@ enum SelfTest {
 
     private static func flag(_ value: Bool) -> String { value ? "yes" : "no" }
 
+    private static let configFixtures = FileManager.default.temporaryDirectory
+        .appendingPathComponent("zmxterm-selftest-conf")
+
+    /// A viewer list on disk. `Reader.parse` can be tested on a string, but the
+    /// fallback to the built-in defaults is a claim about a *file* — that one
+    /// nobody can read leaves you with working viewers rather than none — and
+    /// the only honest way to check that is to hand it one.
+    private static func write(_ text: String) -> String {
+        try? FileManager.default.createDirectory(at: configFixtures, withIntermediateDirectories: true)
+        let url = configFixtures.appendingPathComponent("\(UUID().uuidString).conf")
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+        return url.path
+    }
+
     /// Control characters spelled out, because the two that matter here — the
     /// `^U` that clears the prompt and the `\r` that submits — are invisible in
     /// a failure message otherwise, and "expected: mdv, actual: mdv" is not a
     /// test result anybody can act on.
     private static func visible(_ text: String) -> String {
         text.replacingOccurrences(of: "\u{15}", with: "^U ")
+            .replacingOccurrences(of: "\u{03}", with: "^C")
             .replacingOccurrences(of: "\r", with: " CR")
     }
 
-    private static func plan(_ foreground: String?) -> String {
-        describe(Reader.plan(foreground: foreground, configuration: .default))
+    /// A reader with `pid` in the foreground, where the viewer we watched start
+    /// was `started`. The name deliberately never decides anything here: it is
+    /// the half of this that a pipeline made unreliable, and a test that passed
+    /// because the name happened to match would be proving the old rule.
+    private static func plan(foreground: (pid_t, String)?, started: pid_t?) -> String {
+        describe(Reader.plan(
+            foreground: foreground.map { ForegroundProcess.Running(pid: $0.0, name: $0.1) },
+            started: started
+        ))
     }
 
     private static func describe(_ plan: Reader.Plan) -> String {
@@ -988,6 +1148,16 @@ enum SelfTest {
         case .start: "start"
         case .swap: "swap"
         case let .busy(name): "busy \(name)"
+        }
+    }
+
+    /// A matched rule named by what it runs, so a failure says which line of the
+    /// list won rather than which struct.
+    private static func describe(_ match: Reader.Match) -> String {
+        switch match {
+        case let .run(rule): rule.command
+        case let .missing(tried): "missing \(tried.joined(separator: ", "))"
+        case .unmatched: "<no rule>"
         }
     }
 

@@ -240,11 +240,13 @@ beside `railCollapsed`.
 
 ## The reader
 
-Right-click a file in the tree and **Open in Reader** runs a viewer on it —
-`mdv --watch` by default, which renders markdown, its mermaid diagrams and live
-reload with the kitty graphics protocol. The protocol survives the whole chain:
-the viewer emits images, zmx's terminal emulation carries them, and the
-libghostty surface draws them.
+Right-click a file in the tree and **Open in Reader** runs a viewer on it. A
+reader is **a pane whose job is to show a thing, where the thing's type picks
+the command**: a `.md` opens in `mdv --watch`, which renders markdown, its
+mermaid diagrams and live reload with the kitty graphics protocol; a `.log`
+opens as a live tail; anything else falls to a pager. The graphics protocol
+survives the whole chain — the viewer emits images, zmx's terminal emulation
+carries them, and the libghostty surface draws them.
 
 **A reader is a shell session running a viewer, marked `reader=1`** — not a
 session whose process *is* the viewer, and not a native panel. That distinction
@@ -264,10 +266,25 @@ it; after that they all land there. Any pane can be designated by hand from its
 context menu.
 
 Opening into a reader that already has a viewer up is two `.input` sends: the
-quit key, then the command line and a Return — the one place in this app where a
-trailing newline is wanted. A viewer that ignores its own quit key is signalled
-half a second later rather than left wedging the pane, and only if the pid has
-not changed in the meantime.
+rule's stop key, then the command line and a Return — the one place in this app
+where a trailing newline is wanted. Two sends and not one, whatever the stop
+key is: `^C` is a legitimate stop for a `tail` and SIGINT flushes the tty's
+input queue, so a command line written after it in the same frame would go with
+it. A viewer that ignores its stop key is signalled half a second later rather
+than left wedging the pane, and only if the pid has not changed in the meantime.
+
+**What is running in the reader is recognised by pid, not by name.** The pid is
+the one the app watched start there, remembered in-process, and it is the only
+thing that survives the two cases a rule list creates: a pipeline is several
+processes under one shell, so the name that comes back is whichever the process
+scan reached first rather than a fact about the rule, and a `tail -f`
+never exits, so anything asking "is a viewer still running?" would call the pane
+busy forever and refuse the next document. A pid answers both — if the
+foreground process is the one we started, it is ours to stop, whatever it is
+called and however long it runs. The memory does not survive a restart, and
+afterwards a viewer left running in a reader is treated as somebody else's and
+the pane refuses, which is the safe direction to be wrong in. It is not
+persisted: it is not session state, and `zsm` has no opinion about it.
 
 Double-clicking still inserts a path, for `.md` and everything else. Uniform
 behaviour beats special-casing by extension, and a gesture whose meaning depends
@@ -309,7 +326,7 @@ PaneModel.swift     a surface bound to a session; PaneStore caches them
 Views.swift         sidebar, rail, split canvas, pane chrome
 FileTree.swift      where the tree roots, listing order, visible rows, path → text
 InspectorView.swift the right sidebar, its panels, and the file tree's views
-Reader.swift        the `reader=1` pane: what gets typed, and when the viewer is quit
+Reader.swift        the `reader=1` pane: the viewer rules, what gets typed, when it is stopped
 ReapPolicy.swift    which scratch panes are safe to destroy; the launch pass
 SelfTest.swift      headless tree and drag tests
 bin/zmx-state       the attention hook
@@ -353,22 +370,59 @@ Settings that only mean something to a whole application — `keybind`,
 `copy-on-select`, window chrome — are parsed and simply do not apply to an
 embedded surface.
 
-The reader's viewer is not in that file — it is nothing to do with libghostty —
-so it lives in the app's own defaults, alongside the two switches that were
-already there:
+The reader's viewers are not in that file — they are nothing to do with
+libghostty — and they are a list rather than a setting, which `defaults write`
+is a miserable way to edit. They live in `~/.config/zmxterm/viewers.conf`
+(or `$XDG_CONFIG_HOME/zmxterm/viewers.conf`), read afresh every time a document
+is opened, so an edit applies to the next one with no reload and no watcher:
+
+```
+# patterns              command
+*.md *.markdown         mdv --watch {path}
+*.md *.markdown         glow -p {path}
+*.log *.jsonl  quit=^C  tail -f {path} | humanlog
+*                       bat --paging=always {path}
+```
+
+Ordered, first match wins, and the patterns are globs matched against the file's
+name, case-insensitively. **A rule whose viewer is not installed falls through
+to the next match** — no `mdv` and a `.md` opens in `glow`, or in `bat`;
+degrading to a worse viewer beats degrading to nothing, which is also why the
+same patterns appear twice above. A pipeline needs every binary it names, since
+a pane opening onto `humanlog: command not found` is exactly the empty reader
+this avoids.
+
+The patterns are separated from the command by **two or more spaces or a tab** —
+the gap is the delimiter, which is why a command can contain single spaces,
+pipes and quotes without any escaping. `{path}` is where the file goes, quoted,
+as many times as you write it; a command with no `{path}` gets it appended, so a
+rule written the way #20's single `readerCommand` was still means what its
+author meant. `quit=` in front of the command is how that rule is stopped —
+`q` if it is not said, `quit=^C` for something that has no quit key, `quit=` for
+something that stops for nothing and has to be signalled. It is the one word
+treated that way: `TERM=xterm-kitty mdv --watch {path}` is still an environment
+assignment for the shell, which is a real thing to want while a viewer detects
+Ghostty by name.
+
+**A line that cannot be read loses itself and nothing else**, and says which
+line it was. That is deliberate and it is the opposite of what libghostty does
+with its own config, where one bad key rejects the whole file. Only a file with
+no usable rule left in it falls back to the built-in list above — and says that
+too, once per run, in the same alert that explains anything else that stopped a
+document opening.
+
+The remaining switches are ordinary defaults, including #20's single viewer,
+which still stands as an unconditional rule when there is no file:
 
 ```sh
-defaults write land.liberato.zmxterm readerCommand "glow -p"   # default: mdv --watch
+defaults write land.liberato.zmxterm readerCommand "glow -p"   # superseded by the file
 defaults write land.liberato.zmxterm readerQuitKey q           # empty: signal it instead
 defaults write land.liberato.zmxterm flagFailedTasks -bool false
 defaults write land.liberato.zmxterm reapEphemeralOnLaunch -bool true
 ```
 
-The path is appended to `readerCommand`, quoted, so the setting is a command
-rather than a template. Leading `NAME=value` assignments are allowed and are not
-mistaken for the viewer's name — `TERM=xterm-kitty mdv --watch` is a real thing
-to want while a viewer detects Ghostty by name. A `swift run` build is not the
-bundle, so its defaults domain is `zmxterm` rather than the bundle id.
+A `swift run` build is not the bundle, so its defaults domain is `zmxterm`
+rather than the bundle id.
 
 The config is loaded with an empty `TerminalTheme`. The controller otherwise
 overlays a light/dark palette *after* the file, which would silently override a

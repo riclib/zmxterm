@@ -320,12 +320,28 @@ struct FilesPanel: View {
     /// a relative path resolved against the wrong directory opens nothing.
     private func openInReader(_ entry: FileEntry) {
         tree.selected = entry.path
+        // Read here rather than inside, so a complaint about the list itself can
+        // be said out loud. A viewer list that could not be read falls back to
+        // the built-in defaults, which means everything still works and nothing
+        // the file said applies — the exact shape of bug that is discovered
+        // three days later, so it is said once per distinct problem per run:
+        // often enough to be seen, rarely enough not to become the alert you
+        // dismiss without reading.
+        let viewers = Reader.rules
         let outcome = registry.openInReader(
-            path: entry.path, tab: pane.tab, near: pane.name, store: store
+            path: entry.path, tab: pane.tab, near: pane.name, store: store, rules: viewers.rules
         )
         Log.debug("open in reader from \(pane.name): \(entry.path) → \(outcome)")
+        if let problem = viewers.problem, problem != Self.reportedViewerProblem {
+            Self.reportedViewerProblem = problem
+            Log.notice("reader: \(problem)")
+            readerProblem = [problem, outcome.problem].compactMap { $0 }.joined(separator: "\n\n")
+            return
+        }
         readerProblem = outcome.problem
     }
+
+    private static var reportedViewerProblem: String?
 }
 
 /// One row: an indent, a disclosure zone, an icon, a name.

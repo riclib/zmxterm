@@ -21,6 +21,14 @@ restore stops being `enumerate the socket directory, read labels, sort`.
 Useful test when adding a feature: *could `zsm` show this?* If the answer is no,
 the state is in the wrong place.
 
+The test has an inverse, and `Reader.startedViewers` is the example: the pid of
+the viewer a reader was watched to start is *not* session state — `zsm` has no
+opinion about a pid, it means nothing after a restart, and a session that
+outlives the app is meant to be judged on what is running in it now. So it lives
+in a dictionary in memory and is deliberately never written down. Transient
+facts about live processes are allowed; anything that would have to agree with
+zmx tomorrow is not.
+
 ## Traps, each of which cost real time
 
 **The zmx frame header is 8 bytes, not 5.** `Header` is a Zig
@@ -61,6 +69,11 @@ character and loses the command: SIGINT flushes the tty's input queue, so
 everything written after it in the same `.input` frame goes with it. `^U` is a
 line-editor operation, so the bytes behind it survive. Measured both ways in a
 live session.
+
+Since #25 a viewer rule can stop its viewer *with* `^C` — a `tail -f` has no
+quit key — and that does not change any of the above. The stop and the command
+line are two sends a grace apart, never one, and the command line still opens
+with `^U`. Anything that merges them is the same bug from the other end.
 
 **Do not use `TerminalSurfaceView.terminalFocused`.** It is a two-way binding
 whose push half calls `makeFirstResponder(nil)` on any update where the binding
