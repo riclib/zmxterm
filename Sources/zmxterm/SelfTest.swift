@@ -226,6 +226,86 @@ enum SelfTest {
         expect("and renaming it onto a labelled tab is a merge too",
                rename(PaneOps.renameTab("zaphod", to: "alpha", among: unlabelled)), "merge alpha")
 
+        // New Tab now asks before it creates, which turns two guesses into two
+        // decisions — is this name free, and did the user actually name it —
+        // and both are settled here rather than in a dialog nobody can test.
+        //
+        // The name space a new tab has to be free of is wider than the one a
+        // rename has to be free of, because creating a tab creates a session
+        // and a session's name is its socket path.
+        let liveNames = [
+            labelled("alpha.a", ["tab": "alpha"]),
+            labelled("zaphod", ["tab": "alpha"]),
+            labelled("beta.a", ["tab": "beta"]),
+        ]
+        expect("tab names in use include the sessions themselves",
+               PaneOps.occupiedTabNames(among: liveNames).sorted().joined(separator: " "),
+               "alpha alpha.a beta beta.a zaphod")
+
+        // Accepting the proposal is not naming anything, so the tab stays
+        // disposable and the reaper may eventually take it.
+        expect("the proposal accepted stays disposable",
+               newTab(PaneOps.newTab(typed: "marvin", proposed: "marvin", among: liveNames)),
+               "create marvin ephemeral")
+        expect("a name of your own is a name, so it is kept",
+               newTab(PaneOps.newTab(typed: "logs", proposed: "marvin", among: liveNames)),
+               "create logs kept")
+        // Blank and punctuation-only are the same case: there is no nameless
+        // session to create, so they read as taking the offer rather than as
+        // an error.
+        expect("an empty field takes the offer",
+               newTab(PaneOps.newTab(typed: "", proposed: "marvin", among: liveNames)),
+               "create marvin ephemeral")
+        expect("so does a field of spaces",
+               newTab(PaneOps.newTab(typed: "   ", proposed: "marvin", among: liveNames)),
+               "create marvin ephemeral")
+        expect("and one that folds away entirely",
+               newTab(PaneOps.newTab(typed: "!!!", proposed: "marvin", among: liveNames)),
+               "create marvin ephemeral")
+        // Folding happens before the comparison as well as before the
+        // collision test, so decorating the proposal does not promote it.
+        expect("the proposal with punctuation is still the proposal",
+               newTab(PaneOps.newTab(typed: " marvin! ", proposed: "marvin", among: liveNames)),
+               "create marvin ephemeral")
+        expect("typed input is folded on the way to becoming a name",
+               newTab(PaneOps.newTab(typed: "my project", proposed: "marvin", among: liveNames)),
+               "create my-project kept")
+
+        // Refusal, which is the case that would otherwise attach to a live
+        // session instead of creating anything.
+        expect("an existing tab name is refused",
+               newTab(PaneOps.newTab(typed: "beta", proposed: "marvin", among: liveNames)),
+               "taken beta")
+        expect("so is a session name that holds no tab of its own",
+               newTab(PaneOps.newTab(typed: "zaphod", proposed: "marvin", among: liveNames)),
+               "taken zaphod")
+        expect("a dotted pane name is a socket path too",
+               newTab(PaneOps.newTab(typed: "alpha.a", proposed: "marvin", among: liveNames)),
+               "taken alpha.a")
+        expect("punctuation folds before the collision test",
+               newTab(PaneOps.newTab(typed: "beta!", proposed: "marvin", among: liveNames)),
+               "taken beta")
+        // Case is not folded here either, for the same reason it is not folded
+        // in a rename: zmx's names and labels are case-sensitive, so `Beta` is
+        // genuinely a free socket path.
+        expect("case is not folded, so it is not a collision",
+               newTab(PaneOps.newTab(typed: "Beta", proposed: "marvin", among: liveNames)),
+               "create Beta kept")
+
+        // The proposal is what the dialog opens with, so it has to be free of
+        // the same wider name space — otherwise accepting the default would be
+        // the one gesture that cannot fail and does.
+        expect("the proposal avoids sessions as well as tabs",
+               SessionNames.nextTab(avoiding: PaneOps.occupiedTabNames(among: [
+                   labelled("arthur", ["tab": "wall"]), labelled("ford", ["tab": "wall"]),
+               ])),
+               "zaphod")
+        expect("and an accepted proposal therefore never collides",
+               newTab(PaneOps.newTab(typed: "zaphod", proposed: "zaphod", among: [
+                   labelled("arthur", ["tab": "wall"]), labelled("ford", ["tab": "wall"]),
+               ])),
+               "create zaphod ephemeral")
+
         // Shell integration, where the failure mode is a shell that does not
         // start, so the reentrancy case matters more than the happy one.
         let res = "/R"
@@ -627,6 +707,15 @@ enum SelfTest {
         case .unchanged: "unchanged"
         case let .rename(slug): "rename \(slug)"
         case let .merge(slug): "merge \(slug)"
+        }
+    }
+
+    /// "ephemeral" and "kept" rather than a bare flag, because the word the
+    /// menu uses for the same state is "Keep".
+    private static func newTab(_ decision: PaneOps.NewTab) -> String {
+        switch decision {
+        case let .create(name, ephemeral): "create \(name) \(ephemeral ? "ephemeral" : "kept")"
+        case let .taken(name): "taken \(name)"
         }
     }
 

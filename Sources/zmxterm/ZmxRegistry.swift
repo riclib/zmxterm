@@ -369,14 +369,40 @@ extension ZmxRegistry {
         return name
     }
 
-    /// A new tab is a session that is its own tab. No dialog: the name is a
-    /// placeholder until someone cares enough to change it, and an unnamed pane
-    /// is `ephemeral` so it gets reaped rather than accumulating.
+    /// The placeholder a New Tab dialog opens with: the first Guide name not
+    /// already spoken for.
+    ///
+    /// Avoiding `occupiedTabNames` rather than the `tab` labels alone is what
+    /// lets the dialog promise that its own proposal never collides. A session
+    /// gathered onto someone else's wall holds its name without holding a tab,
+    /// and proposing that name would send the create at it.
+    func proposedTabName() -> String {
+        SessionNames.nextTab(avoiding: PaneOps.occupiedTabNames(among: sessions))
+    }
+
+    /// What the New Tab dialog would do with what has been typed into it.
+    func planNewTab(typed: String, proposed: String) -> PaneOps.NewTab {
+        PaneOps.newTab(typed: typed, proposed: proposed, among: sessions)
+    }
+
+    /// A new tab is a session that is its own tab, created under a name that
+    /// has already been agreed.
+    ///
+    /// It used to be created silently under a placeholder, on the argument that
+    /// the name was provisional until someone cared enough to change it. That
+    /// argument no longer holds, from both ends. `ReapPolicy` reads `ephemeral`
+    /// as "nobody ever named this", so writing it unconditionally was the app
+    /// answering a question about the user on the user's behalf — and the only
+    /// moment the answer is actually available is the moment of creation, which
+    /// is why it arrives here as a parameter rather than being decided here.
+    /// And the name is not provisional at all: it is the session's socket path,
+    /// so it has to have been folded and checked against what exists before
+    /// this runs, or the create silently targets a session that is already
+    /// there. Both of those decisions are `PaneOps.newTab`'s; this only writes.
     @discardableResult
-    func newTab(near: ZmxSession?) -> String? {
-        let name = SessionNames.nextTab(avoiding: Set(sessions.map(\.tab)))
+    func newTab(named name: String, ephemeral: Bool, near: ZmxSession?) -> String? {
         Zmx.createSession(named: name, in: near?.startDir ?? FileManager.default.homeDirectoryForCurrentUser.path)
-        Zmx.apply([PaneOps.LabelChange(session: name, position: nil, size: nil, tab: name, ephemeral: true)])
+        Zmx.apply([PaneOps.LabelChange(session: name, position: nil, size: nil, tab: name, ephemeral: ephemeral)])
         refresh()
         return name
     }

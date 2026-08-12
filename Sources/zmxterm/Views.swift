@@ -31,6 +31,159 @@ private struct TabMerge: Equatable {
     let into: String
 }
 
+/// The New Tab dialog while it is open.
+///
+/// `proposed` is kept alongside `typed` rather than being recovered by
+/// comparison later, because "was this name accepted or chosen" is the whole
+/// question the dialog exists to answer, and it stops being answerable the
+/// moment the proposal is forgotten.
+private struct NewTabPrompt: Equatable {
+    let proposed: String
+    var typed: String
+    /// Set when a create was refused, so the reason can be shown next to the
+    /// field being fixed rather than in a second dialog on top of this one.
+    var taken: String?
+
+    init(proposed: String) {
+        self.proposed = proposed
+        typed = proposed
+    }
+}
+
+/// A sheet rather than the `.alert` the rename prompts use, and the difference
+/// is the entire point of the feature.
+///
+/// The proposal has to open selected, so that accepting it costs one keystroke
+/// and replacing it costs none — a field you must clear first is the friction
+/// this dialog was asked for in order to remove. A SwiftUI `TextField` in an
+/// `.alert` takes focus and leaves the caret at the end, and there is no
+/// supported way in, because the alert's window is AppKit's and the field
+/// inside it is not reachable from the view that declared it. An
+/// `NSViewRepresentable` in a sheet is a real `NSTextField` we hold, so
+/// selecting its contents is one call on its field editor. Matching the
+/// alerts' looks would have been worth something; matching them by shipping a
+/// field that does not select would have been worth less than nothing.
+private struct NewTabSheet: View {
+    let proposed: String
+    @Binding var typed: String
+    let taken: String?
+    var onCancel: () -> Void
+    var onCreate: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("New Tab").font(.headline)
+            // The same sentence the Rename Tab alert says, because it is the
+            // same charset and the user should not have to discover it twice.
+            Text("Letters, digits, dots, dashes and underscores. Spaces become dashes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            SelectedTextField(text: $typed, placeholder: proposed, onSubmit: onCreate, onCancel: onCancel)
+                .frame(height: 22)
+
+            if let taken {
+                // Which name, not just "that didn't work" — the refusal is only
+                // useful if it says what to change.
+                Text("\(taken) is already in use. A tab's name is also its session, so a new one cannot share it.")
+                    .font(.caption)
+                    .foregroundStyle(Color(nsColor: .systemRed))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Create", action: onCreate)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 2)
+        }
+        .padding(20)
+        .frame(width: 380)
+    }
+}
+
+/// An `NSTextField` that selects what is already in it the moment it takes
+/// focus.
+///
+/// Everything here is about that one behaviour. Focus is claimed once, on the
+/// first update that has a window to claim it from — a sheet's contents are
+/// built before they are hosted, so doing it in `makeNSView` would aim at no
+/// window — and `selectAll` runs on the field editor, which only exists once
+/// the field is first responder.
+///
+/// Return and Escape are handled here rather than left to the sheet's default
+/// and cancel buttons. While the field editor is first responder it sees those
+/// keys first, and what it does with them is its own business; routing them
+/// explicitly is the difference between "usually works" and "works".
+private struct SelectedTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    var onSubmit: () -> Void
+    var onCancel: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: text)
+        field.placeholderString = placeholder
+        field.delegate = context.coordinator
+        field.isBordered = true
+        field.bezelStyle = .roundedBezel
+        field.focusRingType = .default
+        field.lineBreakMode = .byTruncatingTail
+        field.usesSingleLineMode = true
+        field.cell?.sendsActionOnEndEditing = false
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        // Only when it differs: writing the value back unconditionally moves
+        // the insertion point to the end on every keystroke.
+        if field.stringValue != text { field.stringValue = text }
+        guard !context.coordinator.hasFocused, let window = field.window else { return }
+        context.coordinator.hasFocused = true
+        DispatchQueue.main.async {
+            window.makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+            // The one thing nobody can check by reading the code, and nothing
+            // on screen distinguishes "focused" from "focused and selected"
+            // until you type. So say it out loud: a run with ZMXTERM_DEBUG set
+            // reports the range, and a selection of the whole string is the
+            // feature working.
+            Log.debug("new tab field: selected \(field.currentEditor()?.selectedRange ?? NSRange(location: -1, length: -1)) of \(field.stringValue.count)")
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: SelectedTextField
+        var hasFocused = false
+
+        init(_ parent: SelectedTextField) { self.parent = parent }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(_: NSControl, textView _: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                parent.onSubmit()
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.onCancel()
+                return true
+            default:
+                return false
+            }
+        }
+    }
+}
+
 struct RootView: View {
     @StateObject private var registry = ZmxRegistry()
     @StateObject private var store = PaneStore()
@@ -48,6 +201,7 @@ struct RootView: View {
     @State private var renamingTab: String?
     @State private var killingTab: String?
     @State private var mergingTab: TabMerge?
+    @State private var newTabPrompt: NewTabPrompt?
     @State private var tabNameDraft = ""
     @State private var focusRequest: (pane: String, token: Int) = ("", 0)
     @State private var configWatcher = TerminalConfig.Watcher()
@@ -161,6 +315,22 @@ struct RootView: View {
             the labels saying which tab each pane came from are what gets overwritten.
             """)
         }
+        .sheet(isPresented: .init(get: { newTabPrompt != nil }, set: { if !$0 { newTabPrompt = nil } })) {
+            if let prompt = newTabPrompt {
+                NewTabSheet(
+                    proposed: prompt.proposed,
+                    typed: .init(
+                        get: { newTabPrompt?.typed ?? "" },
+                        // Editing clears the refusal: the message is about a
+                        // name that is no longer the one in the field.
+                        set: { newTabPrompt?.typed = $0; newTabPrompt?.taken = nil }
+                    ),
+                    taken: prompt.taken,
+                    onCancel: { newTabPrompt = nil },
+                    onCreate: createTab
+                )
+            }
+        }
         .onChange(of: renamingTab) { _, new in tabNameDraft = new ?? "" }
         .onChange(of: registry.sessions) { _, sessions in
             store.prune(keeping: Set(sessions.map(\.name)))
@@ -236,12 +406,30 @@ struct RootView: View {
         }
     }
 
+    /// Both entry points — the sidebar button and ⌘T, which are the same button
+    /// — end here, and here only opens the dialog. Nothing is created until it
+    /// is confirmed.
     private func openTab() {
-        let near = selectedPane.flatMap { name in registry.sessions.first { $0.name == name } }
-        if let created = registry.newTab(near: near) {
-            selectedTab = created
-            selectedPane = created
-            requestFocus(created)
+        guard newTabPrompt == nil else { return }
+        newTabPrompt = NewTabPrompt(proposed: registry.proposedTabName())
+    }
+
+    private func createTab() {
+        guard let prompt = newTabPrompt else { return }
+        switch registry.planNewTab(typed: prompt.typed, proposed: prompt.proposed) {
+        case let .taken(name):
+            // The dialog stays open with what was typed still in it. Creating
+            // under a name in use would attach to that session instead of
+            // making a tab, so there is nothing to fall back to.
+            newTabPrompt?.taken = name
+        case let .create(name, ephemeral):
+            newTabPrompt = nil
+            let near = selectedPane.flatMap { pane in registry.sessions.first { $0.name == pane } }
+            if let created = registry.newTab(named: name, ephemeral: ephemeral, near: near) {
+                selectedTab = created
+                selectedPane = created
+                requestFocus(created)
+            }
         }
     }
 
@@ -297,14 +485,18 @@ struct SidebarView: View {
     }
 
     /// ⌘T works without it, but a window you've never used shouldn't require
-    /// knowing that.
+    /// knowing that — and the shortcut hangs off this button rather than a
+    /// second one, so there is only ever one thing New Tab can mean.
+    ///
+    /// The ellipsis is a promise the app now keeps: something opens and asks
+    /// before anything is created.
     private var newTabButton: some View {
         Button(action: onNewTab) {
             HStack(spacing: 6) {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .medium))
                 if !collapsed {
-                    Text("New Terminal").font(.system(size: 12))
+                    Text("New Tab…").font(.system(size: 12))
                     Spacer(minLength: 0)
                 }
             }
@@ -316,7 +508,7 @@ struct SidebarView: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut("t", modifiers: .command)
-        .help("New terminal (⌘T)")
+        .help("New tab (⌘T)")
     }
 
     private var tabList: some View {
