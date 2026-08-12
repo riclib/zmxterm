@@ -70,6 +70,13 @@ everything written after it in the same `.input` frame goes with it. `^U` is a
 line-editor operation, so the bytes behind it survive. Measured both ways in a
 live session.
 
+Measured on the **attached-surface `.input` path**, with `mdv` running. A later
+attempt to reproduce it through `zmx send` into an unattached session, with
+`tail` in the foreground, ran the command fine — so the loss depends on the path
+in, on what is in the foreground, or on both. Do not conclude from one green
+run that the trap is imaginary; the two-send design below costs nothing and is
+right either way.
+
 Since #25 a viewer rule can stop its viewer *with* `^C` — a `tail -f` has no
 quit key — and that does not change any of the above. The stop and the command
 line are two sends a grace apart, never one, and the command line still opens
@@ -189,6 +196,12 @@ sessions alongside your test ones.
 - Create test sessions under a prefix of your own and kill them when you finish:
   `cd /tmp && env -u ZMX_SESSION zmx attach qaNN.a < /dev/null > /dev/null 2>&1`.
   The `env -u` is not optional — see the `ZMX_SESSION` trap above.
+
+**Documentation is part of the deliverable.** If the change alters what a user
+sees or how they configure it, `README.md` says so; if it adds a trap or an
+invariant the next agent could break, this file says so. Read `git log` for the
+standard — the commits here explain *why*, and the docs are expected to keep up
+in the same commit rather than in a follow-up nobody writes.
 
 **Do not release.** No tags, no notarisation, no touching
 `/Applications/zmxterm.app`, no version bumps. Releases are cut deliberately.
