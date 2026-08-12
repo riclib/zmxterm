@@ -149,3 +149,15 @@ zmx set spike.logs pos= tab=
 Only kill sessions you created or were told to. A pane you didn't make may hold
 someone's twenty minutes of work, and closing a pane in the GUI deliberately
 does not kill anything — don't be the thing that does.
+
+## A pane may hold another Claude
+
+Panes are not all shells. When one holds a Claude session, talk to it with
+`SendMessage` — `ListAgents` shows it alongside every other peer session. Do
+not use `zmx send` to put a prompt in its input: keystrokes into a PTY hit
+bracketed paste, LF and CR do different things, and the only way to learn
+whether it landed is to read the scrollback and guess. `zmx send` is for
+driving a shell.
+
+Placement still works the same way. The orchestrator wears `title=orc` and its
+children stack in a column to its right; see the wall example above.
