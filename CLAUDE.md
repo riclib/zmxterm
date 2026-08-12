@@ -53,6 +53,15 @@ accepts the flag and returns everything. Filter with `grep`.
 with a `title` label; a *tab* really can be renamed, because its identity is the
 `tab` label.
 
+**Clear a shell's line with `^U`, never `^C`.** Sending a command into a pane
+that may have something on its prompt — the reader does, because a viewer that
+ignored its quit key echoed that key underneath itself — has to kill the line
+first, or the command arrives as `qmdv --watch …`. `^C` looks like the obvious
+character and loses the command: SIGINT flushes the tty's input queue, so
+everything written after it in the same `.input` frame goes with it. `^U` is a
+line-editor operation, so the bytes behind it survive. Measured both ways in a
+live session.
+
 **Do not use `TerminalSurfaceView.terminalFocused`.** It is a two-way binding
 whose push half calls `makeFirstResponder(nil)` on any update where the binding
 reads false, including the update caused by the click that just focused the

@@ -4,12 +4,14 @@ import SwiftUI
 
 /// The panels the right sidebar can show.
 ///
-/// One case today. The container is built around this enum rather than around
-/// the file tree so that the second panel — the markdown preview in #20 — is a
-/// case, an icon, and one line in the `switch` in `InspectorView.panelBody`,
-/// with the header, the collapse rail, the width and the preference already
-/// working. Whatever a panel needs from the focused pane arrives the same way
-/// the files panel gets it: as the pane and its model, passed in.
+/// One case today, and it was nearly two: the markdown preview this was built
+/// in anticipation of turned out to belong in a zmx session rather than in a
+/// panel — see `Reader`, and `CLAUDE.md`'s test of whether `zsm` could show it.
+/// The container still earns its shape, because whatever the second panel turns
+/// out to be is a case, an icon and one line in the `switch` in
+/// `InspectorView.panelBody`, with the header, the collapse rail, the width and
+/// the preference already working. Whatever a panel needs from the focused pane
+/// arrives the same way the files panel gets it: passed in.
 enum InspectorPanel: String, CaseIterable, Identifiable {
     case files
 
@@ -40,6 +42,9 @@ struct InspectorView: View {
     /// no tab, or a tab with no panes.
     let pane: ZmxSession?
     let model: PaneModel?
+    /// Needed because a panel can do more than look: opening a document finds
+    /// this tab's reader, or splits a pane to make one.
+    let registry: ZmxRegistry
     @Binding var collapsed: Bool
     @Binding var width: Double
     @Binding var panel: String
@@ -134,7 +139,7 @@ struct InspectorView: View {
         switch selectedPanel {
         case .files:
             if let pane, let model {
-                FilesPanel(pane: pane, model: model, terminal: model.terminal)
+                FilesPanel(pane: pane, model: model, registry: registry, terminal: model.terminal)
             } else {
                 InspectorPlaceholder(text: "No pane focused")
             }
@@ -198,8 +203,19 @@ struct InspectorPlaceholder: View {
 struct FilesPanel: View {
     let pane: ZmxSession
     let model: PaneModel
+    let registry: ZmxRegistry
     @ObservedObject var terminal: TerminalViewState
     @StateObject private var tree = FileTreeModel()
+
+    /// Sending a document to the reader can reach a pane that has no surface —
+    /// one in a hidden tab, or one created a moment ago — so the store is what
+    /// answers "is there a live client for this", not the model above.
+    @EnvironmentObject private var store: PaneStore
+
+    /// Why the last Open in Reader did nothing. An alert rather than a line in
+    /// the panel: every reason is something to go and fix, and a message that
+    /// scrolls away with the tree would be a refusal nobody read.
+    @State private var readerProblem: String?
 
     private var rootPath: String? {
         FileTree.rootPath(workingDirectory: terminal.workingDirectory, startDir: pane.startDir)
@@ -223,6 +239,14 @@ struct FilesPanel: View {
         // `initial: true` because the first root is not a change: the panel has
         // to point somewhere the moment it appears.
         .onChange(of: rootPath, initial: true) { _, path in tree.setRoot(path) }
+        .alert(
+            "Nothing opened",
+            isPresented: .init(get: { readerProblem != nil }, set: { if !$0 { readerProblem = nil } })
+        ) {
+            Button("OK", role: .cancel) { readerProblem = nil }
+        } message: {
+            Text(readerProblem ?? "")
+        }
     }
 
     private var pathHeader: some View {
@@ -263,7 +287,8 @@ struct FilesPanel: View {
                         isSelected: tree.selected == row.entry.path,
                         onToggle: { tree.toggle(row) },
                         onSelect: { tree.selected = row.entry.path },
-                        onInsert: { insert(row.entry) }
+                        onInsert: { insert(row.entry) },
+                        onOpenInReader: { openInReader(row.entry) }
                     )
                 }
             }
@@ -281,6 +306,26 @@ struct FilesPanel: View {
         Log.debug("insert into \(pane.name): \(text)")
         model.insert(text)
     }
+
+    /// The other thing a file can do, and deliberately not what double-clicking
+    /// does.
+    ///
+    /// Double-click still inserts a path, for every file, `.md` or not: uniform
+    /// behaviour beats special-casing by extension, and a gesture whose meaning
+    /// depends on the file you aimed it at is a gesture you have to think about.
+    /// Opening a document is a verb you ask for by name.
+    ///
+    /// The path is absolute, not the tree-relative text `insert` produces. The
+    /// reader's shell is not necessarily sitting where the tree is rooted, and
+    /// a relative path resolved against the wrong directory opens nothing.
+    private func openInReader(_ entry: FileEntry) {
+        tree.selected = entry.path
+        let outcome = registry.openInReader(
+            path: entry.path, tab: pane.tab, near: pane.name, store: store
+        )
+        Log.debug("open in reader from \(pane.name): \(entry.path) → \(outcome)")
+        readerProblem = outcome.problem
+    }
 }
 
 /// One row: an indent, a disclosure zone, an icon, a name.
@@ -296,6 +341,7 @@ private struct FileTreeRow: View {
     let onToggle: () -> Void
     let onSelect: () -> Void
     let onInsert: () -> Void
+    let onOpenInReader: () -> Void
 
     var body: some View {
         HStack(spacing: 4) {
@@ -322,6 +368,16 @@ private struct FileTreeRow: View {
         // the two-tap sequence to it rather than delivering two single taps.
         .onTapGesture(count: 2, perform: onInsert)
         .onTapGesture(perform: onSelect)
+        .contextMenu {
+            // Offered for every file rather than for `.md` alone: the viewer is
+            // configuration, so which files are readable is the viewer's
+            // opinion and not something to hardcode a list of extensions
+            // against. Directories are excluded because no viewer takes one.
+            if !row.entry.isDirectory {
+                Button("Open in Reader") { onOpenInReader() }
+            }
+            Button("Insert Path") { onInsert() }
+        }
         .help(row.canExpand || !row.entry.isDirectory
             ? row.entry.path
             : "\(row.entry.path) — a link back to a directory already open above")

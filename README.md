@@ -238,6 +238,41 @@ filesystem, `zsm` has no opinion about it, and it is nobody's label. What
 persists is whether the sidebar is open and how wide it is, in `@AppStorage`
 beside `railCollapsed`.
 
+## The reader
+
+Right-click a file in the tree and **Open in Reader** runs a viewer on it —
+`mdv --watch` by default, which renders markdown, its mermaid diagrams and live
+reload with the kitty graphics protocol. The protocol survives the whole chain:
+the viewer emits images, zmx's terminal emulation carries them, and the
+libghostty surface draws them.
+
+**A reader is a shell session running a viewer, marked `reader=1`** — not a
+session whose process *is* the viewer, and not a native panel. That distinction
+is the feature. With a shell underneath, the viewer can be stopped and started
+again on a different document while the pane keeps its name, position, size,
+scrollback and labels; a pane whose process was the viewer would have to be
+killed and recreated for every file. And it keeps the one rule: a reader is an
+ordinary zmx session, so `zsm` sees it, it survives quitting, and it restores
+itself without this app remembering anything. The label is a bare flag, which
+fits zmx's charset — the path lives in argv, where a path can actually live,
+because a label could never hold one.
+
+A tab keeps **one** reader. The second document replaces what the first is
+showing rather than splitting the layout again, which is what a stable panel
+means. The first Open in Reader in a tab splits a pane to the right and marks
+it; after that they all land there. Any pane can be designated by hand from its
+context menu.
+
+Opening into a reader that already has a viewer up is two `.input` sends: the
+quit key, then the command line and a Return — the one place in this app where a
+trailing newline is wanted. A viewer that ignores its own quit key is signalled
+half a second later rather than left wedging the pane, and only if the pid has
+not changed in the meantime.
+
+Double-clicking still inserts a path, for `.md` and everything else. Uniform
+behaviour beats special-casing by extension, and a gesture whose meaning depends
+on the file you aimed it at is one you have to think about first.
+
 ## Layout and dragging
 
 Pane frames are computed in one pass (`PaneLayout.compute`) rather than by a
@@ -274,6 +309,7 @@ PaneModel.swift     a surface bound to a session; PaneStore caches them
 Views.swift         sidebar, rail, split canvas, pane chrome
 FileTree.swift      where the tree roots, listing order, visible rows, path → text
 InspectorView.swift the right sidebar, its panels, and the file tree's views
+Reader.swift        the `reader=1` pane: what gets typed, and when the viewer is quit
 ReapPolicy.swift    which scratch panes are safe to destroy; the launch pass
 SelfTest.swift      headless tree and drag tests
 bin/zmx-state       the attention hook
@@ -316,6 +352,23 @@ including the rename-over that most editors do rather than writing in place.
 Settings that only mean something to a whole application — `keybind`,
 `copy-on-select`, window chrome — are parsed and simply do not apply to an
 embedded surface.
+
+The reader's viewer is not in that file — it is nothing to do with libghostty —
+so it lives in the app's own defaults, alongside the two switches that were
+already there:
+
+```sh
+defaults write land.liberato.zmxterm readerCommand "glow -p"   # default: mdv --watch
+defaults write land.liberato.zmxterm readerQuitKey q           # empty: signal it instead
+defaults write land.liberato.zmxterm flagFailedTasks -bool false
+defaults write land.liberato.zmxterm reapEphemeralOnLaunch -bool true
+```
+
+The path is appended to `readerCommand`, quoted, so the setting is a command
+rather than a template. Leading `NAME=value` assignments are allowed and are not
+mistaken for the viewer's name — `TERM=xterm-kitty mdv --watch` is a real thing
+to want while a viewer detects Ghostty by name. A `swift run` build is not the
+bundle, so its defaults domain is `zmxterm` rather than the bundle id.
 
 The config is loaded with an empty `TerminalTheme`. The controller otherwise
 overlays a light/dark palette *after* the file, which would silently override a

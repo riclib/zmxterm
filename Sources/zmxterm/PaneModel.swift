@@ -189,6 +189,20 @@ final class PaneStore: ObservableObject {
         return created
     }
 
+    /// The model for a session *if it is already talking to the daemon*, and
+    /// nil otherwise.
+    ///
+    /// Deliberately not `model(for:)`, which creates one — an unattached model
+    /// drops every `.input` it is given, because `ZmxClient.send` has no socket
+    /// until the surface has laid out and reported a viewport. A pane in a
+    /// hidden tab and a pane created a moment ago both look like that, so the
+    /// answer a caller needs is "can this pane be typed into", not "is there an
+    /// object for it". `Reader` takes the other road when this returns nil.
+    func attachedModel(for sessionName: String) -> PaneModel? {
+        guard let model = models[sessionName], model.isAttached else { return nil }
+        return model
+    }
+
     func prune(keeping liveNames: Set<String>) {
         for (name, model) in models where !liveNames.contains(name) {
             model.detach()
