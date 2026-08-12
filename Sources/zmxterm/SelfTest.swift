@@ -444,6 +444,33 @@ enum SelfTest {
         expect("and the parent's session name is still gone",
                session["ZMX_SESSION"] ?? "<removed>", "<removed>")
 
+        // The keybinds the app takes back. ⌘Q reached the terminal, became an
+        // action nothing implements, and the Quit item never fired — so the
+        // interesting property is that the user's file survives and ours lands
+        // after it, where the last binding for a chord wins.
+        let userConfig = "theme = Builtin Pastel Dark\nkeybind = shift+enter=text:\\n"
+        let assembled = TerminalConfig.configText(userConfig: userConfig, directory: "/cfg")
+        expect("the user's config survives untouched",
+               assembled.contains("theme = Builtin Pastel Dark") ? "kept" : "lost", "kept")
+        expect("their own keybind survives too",
+               assembled.contains("keybind = shift+enter=text:\\n") ? "kept" : "lost", "kept")
+        expect("and ours land after it",
+               assembled.contains("keybind = super+q=unbind") ? "yes" : "no", "yes")
+        expect("ours come last, so a later rebind by the user would win",
+               assembled.range(of: "keybind = super+q=unbind")!.lowerBound
+                   > assembled.range(of: "keybind = shift+enter")!.lowerBound ? "after" : "before", "after")
+        // A relative include would resolve against this process's working
+        // directory once the file is passed as text rather than as a path.
+        expect("a relative include is made absolute",
+               TerminalConfig.configText(userConfig: "config-file = themes/mine", directory: "/cfg")
+                   .contains("config-file = /cfg/themes/mine") ? "absolute" : "unchanged", "absolute")
+        expect("an absolute include is left alone",
+               TerminalConfig.configText(userConfig: "config-file = /etc/x", directory: "/cfg")
+                   .contains("config-file = /etc/x") ? "kept" : "mangled", "kept")
+        expect("no config at all still unbinds",
+               { if case let .generated(text) = TerminalConfig.configSource(path: nil) {
+                     return text.contains("super+q=unbind") ? "yes" : "no" } ; return "not generated" }(), "yes")
+
         // The live process tree, since the whole point is that it beats the
         // directory guess. Skipped when nothing is running to look at.
         let live = Zmx.list()
