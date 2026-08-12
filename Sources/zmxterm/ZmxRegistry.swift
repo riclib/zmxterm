@@ -249,6 +249,54 @@ final class ZmxRegistry: ObservableObject {
 }
 
 extension Zmx {
+    /// The environment to hand a `zmx` client this app spawns, given the one
+    /// the app itself inherited.
+    ///
+    /// `ZMX_SESSION` has to go, and it is load-bearing rather than tidy-up.
+    /// `zmx attach` run with it set creates nothing: the client reads it,
+    /// concludes it is already inside a session, and sends `.SwitchSession` to
+    /// that daemon instead — exit 0, no new session, no error. Launch zmxterm
+    /// from a terminal that is itself in a pane, which is the ordinary way to
+    /// launch it while developing, and every Split and every new tab silently
+    /// does nothing. That is issue #16. Worse, the switch is a harmless no-op
+    /// only while the target name happens to be free; aimed at a name that
+    /// exists it would yank whichever pane the app was launched from over to
+    /// some other session.
+    ///
+    /// Nothing is lost by removing it, because zmx injects `ZMX_SESSION` into
+    /// every session it creates. The new pane's shell still reports its own
+    /// name; what stops is the *parent's* name leaking into the child.
+    ///
+    /// Nothing else is stripped, and that is a decision rather than an
+    /// oversight. zmx 0.7.0 reads `ZMX_DIR`, `ZMX_DIR_MODE`, `ZMX_LOG_MODE`,
+    /// `ZMX_SESSION_PREFIX` and `ZMX_SESSION` (see `zmx help`), and this app
+    /// reads `ZMX_SOCKET_DIR` and `ZMX_BIN` of its own. `ZMX_DIR` has to be
+    /// inherited because `Zmx.run` passes it through to `list` and `set`, so
+    /// dropping it from creates alone would put new sessions in a socket
+    /// directory the app does not enumerate; `ZMX_DIR_MODE` and `ZMX_LOG_MODE`
+    /// only choose permissions and express a preference worth honouring. The
+    /// app's own two matter to the created shell, which should be able to
+    /// launch zmxterm again exactly as this one was launched.
+    ///
+    /// `ZMX_SESSION_PREFIX` is the near miss, and it is left alone on purpose.
+    /// It genuinely does change what `zmx attach <name>` creates — measured
+    /// against zmx 0.7.0: with it set, `attach probe` yields `<prefix>probe` —
+    /// so it is the same class of trap. But `zmx set` applies the prefix too,
+    /// while `zmx list` reports real, unprefixed names. Stripping it *here
+    /// alone* would therefore be a regression rather than a fix: the create
+    /// would land on the bare name while the `zmx set` that places the new
+    /// pane, sent through `Zmx.run` with the prefix still in the app's own
+    /// environment, would aim at a session that does not exist, and the pane
+    /// would arrive unplaced. Doing it properly means stripping it from
+    /// `Zmx.run` as well, which reaches `kill` and `set` on sessions this app
+    /// never created and is a wider change than this bug justifies. Nobody sets
+    /// it here today. Whoever does should fix both ends at once, or neither.
+    static func clientEnvironment(inheriting environment: [String: String]) -> [String: String] {
+        var environment = environment
+        environment["ZMX_SESSION"] = nil
+        return environment
+    }
+
     /// Create a session running a plain login shell, with nobody attached.
     ///
     /// `zmx run` looks like the obvious way to do this and is wrong: it is task
@@ -275,7 +323,11 @@ extension Zmx {
         // `ZMXTERM` answers "did zmxterm make me", never "am I on screen".
         // `ZMX_SESSION`, which zmx sets for every session however it was made,
         // is the variable worth branching on.
-        var environment = ProcessInfo.processInfo.environment
+        //
+        // What is removed on the way in matters as much as what is added here —
+        // see `clientEnvironment(inheriting:)`, which is the only reason this
+        // call creates anything at all when the app was launched from a pane.
+        var environment = clientEnvironment(inheriting: ProcessInfo.processInfo.environment)
         environment["ZMXTERM"] = "1"
         environment["ZMXTERM_VERSION"] = Zmx.appVersion
         environment["TERM"] = Zmx.terminalType

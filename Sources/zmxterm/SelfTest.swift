@@ -278,6 +278,38 @@ enum SelfTest {
         expect("and the password database answers when it is not",
                ShellIntegration.loginShell(inherited: [:]).isEmpty ? "empty" : "found", "found")
 
+        // What the app hands `zmx attach`. The one removal is the whole of
+        // issue #16: with `ZMX_SESSION` riding along, the client switches the
+        // caller's session instead of creating, so Split and ⌘T did nothing at
+        // all whenever zmxterm was launched from inside a pane. A test rather
+        // than a comment because the line looks like tidy-up and is not.
+        let inherited = [
+            "ZMX_SESSION": "ford",
+            "ZMX_SESSION_PREFIX": "team-",
+            "ZMX_SOCKET_DIR": "/tmp/zmx-501",
+            "ZMX_BIN": "/opt/homebrew/bin/zmx",
+            "ZMX_DIR": "/tmp/zmx-501",
+            "SHELL": "/bin/zsh",
+        ]
+        let handed = Zmx.clientEnvironment(inheriting: inherited)
+        expect("the parent's session name never reaches zmx attach",
+               handed["ZMX_SESSION"] ?? "<removed>", "<removed>")
+        // Deliberately not stripped, each for its own reason — see the doc
+        // comment. `ZMX_SESSION_PREFIX` is the one that looks like it should
+        // be: it does change what `attach` creates, but `zmx set` applies it
+        // too, so removing it only here would leave every new pane unplaced.
+        expect("everything else is passed through",
+               env(handed.filter { $0.key != "SHELL" }),
+               "ZMX_BIN=/opt/homebrew/bin/zmx, ZMX_DIR=/tmp/zmx-501, "
+                   + "ZMX_SESSION_PREFIX=team-, ZMX_SOCKET_DIR=/tmp/zmx-501")
+        // An app launched from the Dock inherits no ZMX_SESSION, and removing
+        // what was never there must not invent an empty one. zmx 0.7.0 happens
+        // to treat `ZMX_SESSION=` as unset — measured — but that is its
+        // business, and relying on it would make this fix depend on a detail
+        // nobody documented. Removing the key means never finding out.
+        expect("a Dock launch is unchanged",
+               env(Zmx.clientEnvironment(inheriting: ["SHELL": "/bin/zsh"])), "SHELL=/bin/zsh")
+
         // The live process tree, since the whole point is that it beats the
         // directory guess. Skipped when nothing is running to look at.
         let live = Zmx.list()
