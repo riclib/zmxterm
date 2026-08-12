@@ -390,6 +390,60 @@ enum SelfTest {
         expect("a Dock launch is unchanged",
                env(Zmx.clientEnvironment(inheriting: ["SHELL": "/bin/zsh"])), "SHELL=/bin/zsh")
 
+        // What the created shell is told it is running in. Issue #22: tools
+        // gate features on the emulator's *name*, so `mdv` refused interactive
+        // mode under `TERM_PROGRAM=zmxterm` and takes it under `ghostty` —
+        // measured in a pane, with the kitty graphics it wants confirmed to
+        // survive zmx's emulation and reach our surface. The value looks like a
+        // lie, so it is pinned here rather than left to read like a typo: what
+        // draws the pane is libghostty, which is what `TERM_PROGRAM` names.
+        let session = Zmx.sessionEnvironment(
+            inheriting: inherited, terminalType: "xterm-ghostty", emulatorVersion: "1.3.2"
+        )
+        expect("the pane answers to the emulator that draws it",
+               session["TERM_PROGRAM"] ?? "<unset>", "ghostty")
+        // The name and the version are read as a pair, so the version has to be
+        // the emulator's. Pairing `ghostty` with this app's 0.8.0 would claim a
+        // real, pre-1.0 Ghostty and reintroduce #22 one gate later: past the
+        // name check, refused by the version check, for a capability we have.
+        expect("and gives the emulator's version, not its own",
+               session["TERM_PROGRAM_VERSION"] ?? "<unset>", "1.3.2")
+        // The app's own version still goes with the app's own variable. This is
+        // the pair that must not get crossed.
+        expect("while the app's version stays on the app's variable",
+               session["ZMXTERM_VERSION"] ?? "<unset>", Zmx.appVersion)
+        // Asked of libghostty rather than copied from Package.resolved, so a
+        // dependency bump cannot leave it stale. Checked by shape, not value —
+        // pinning the number here would be the same staleness in a new place.
+        expect("the emulator answers with a version a gate can parse",
+               Zmx.emulatorVersion.first.map { $0.isNumber ? "numeric" : "not numeric" } ?? "empty",
+               "numeric")
+        expect("and it is not this app's version wearing the emulator's name",
+               Zmx.emulatorVersion == Zmx.appVersion ? "crossed" : "distinct", "distinct")
+        // An emulator with nothing to say drops the variable rather than
+        // setting it empty: unset is the case every tool already handles.
+        expect("no version to give means no claim made",
+               Zmx.sessionEnvironment(
+                   inheriting: inherited, terminalType: "xterm-ghostty", emulatorVersion: ""
+               )["TERM_PROGRAM_VERSION"] ?? "<unset>", "<unset>")
+        // The cost of the line above: "which app am I in" now has to be asked a
+        // different way, so these two are the answer and must not quietly go.
+        expect("and still says which app made it",
+               "\(session["ZMXTERM"] ?? "<unset>")/\(session["ZMXTERM_VERSION"] ?? "<unset>")",
+               "1/\(Zmx.appVersion)")
+        // The identity claim is not allowed to outrun the terminfo entry the
+        // machine actually has: `terminalType` probes for `xterm-ghostty` and
+        // falls back, and whatever it answers is what `TERM` carries.
+        expect("TERM carries whatever the probe resolved",
+               Zmx.sessionEnvironment(
+                   inheriting: inherited, terminalType: "xterm-256color", emulatorVersion: "1.3.2"
+               )["TERM"] ?? "<unset>",
+               "xterm-256color")
+        // Built on `clientEnvironment`, so the #16 removal above holds here too
+        // — this is the function whose output actually reaches `zmx attach`.
+        expect("and the parent's session name is still gone",
+               session["ZMX_SESSION"] ?? "<removed>", "<removed>")
+
         // The live process tree, since the whole point is that it beats the
         // directory guess. Skipped when nothing is running to look at.
         let live = Zmx.list()

@@ -12,6 +12,11 @@ let package = Package(
             name: "zmxterm",
             dependencies: [
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+                // For `ghostty_info()`, which is how the app learns the version
+                // of the emulator it claims to be — see `Zmx.emulatorVersion`.
+                // GhosttyTerminal links this anyway, so importing it without
+                // saying so happens to build; naming it is what keeps that true.
+                .product(name: "GhosttyKit", package: "libghostty-spm"),
             ],
             resources: [
                 .copy("Resources/icons"),

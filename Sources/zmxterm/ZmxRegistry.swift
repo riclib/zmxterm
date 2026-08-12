@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import GhosttyKit
 
 /// One live zmx session. This is the whole app model — there is no state file,
 /// no tab database. Everything below is either reported by the daemon or stored
@@ -297,6 +298,68 @@ extension Zmx {
         return environment
     }
 
+    /// What a session created here is told about the terminal it is running in.
+    ///
+    /// The daemon inherits this process's environment, so anything set here
+    /// lands in the session's shell and every child of it.
+    ///
+    /// Be clear what it can mean: only sessions *created* by this app get it.
+    /// One made in a terminal and later shown in a pane will not, so `ZMXTERM`
+    /// answers "did zmxterm make me", never "am I on screen". `ZMX_SESSION`,
+    /// which zmx sets for every session however it was made, is the variable
+    /// worth branching on.
+    ///
+    /// What is removed on the way in matters as much as what is added — see
+    /// `clientEnvironment(inheriting:)`, which is the only reason a create
+    /// creates anything at all when the app was launched from a pane.
+    ///
+    /// `terminalType` and `emulatorVersion` are parameters rather than direct
+    /// reads of `Zmx.terminalType` and `Zmx.emulatorVersion` because those probe
+    /// `infocmp` and libghostty on first use, and a test should not need a
+    /// terminfo database or a linked emulator to ask what this function does.
+    static func sessionEnvironment(
+        inheriting inherited: [String: String],
+        terminalType: String,
+        emulatorVersion: String
+    ) -> [String: String] {
+        var environment = clientEnvironment(inheriting: inherited)
+        environment["ZMXTERM"] = "1"
+        environment["ZMXTERM_VERSION"] = Zmx.appVersion
+        environment["TERM"] = terminalType
+        environment["COLORTERM"] = "truecolor"
+        // The convention Terminal.app, iTerm and Ghostty all follow, so shell
+        // configs that branch on the host have something to branch on.
+        //
+        // It says `ghostty`, not `zmxterm`, and that reads like a lie until you
+        // know what the variable names. `TERM_PROGRAM` names the *emulator*, and
+        // ours is libghostty — the same code Ghostty ships, drawing the same
+        // cells with the same capabilities. It is the same claim `TERM` makes on
+        // the line above, for the same reason: the thing that describes what
+        // this pane can do is Ghostty's.
+        //
+        // The claim is worth making because it is backed. Tools detect the kitty
+        // graphics protocol by program name — `mdv` refuses interactive mode
+        // outright unless `TERM_PROGRAM` is `ghostty` or `TERM` contains
+        // `kitty` — and graphics do survive the whole trip here: emitted by the
+        // program, carried through zmx's terminal emulation, drawn by our
+        // surface. Under `zmxterm` a viewer that works is turned away on its
+        // name; under `ghostty` it runs. Capability-by-program-name is wrong and
+        // common, and not ours to fix in every tool.
+        //
+        // What it costs is the "which app am I in" signal, which is why
+        // `ZMXTERM` and `ZMXTERM_VERSION` above stay: anything wanting to know
+        // it is specifically zmxterm reads those, with the caveat above about
+        // what they can honestly answer. Note which version goes where —
+        // `ZMXTERM_VERSION` is the app's, and the pair below is the emulator's.
+        // Crossing them is the bug described on `Zmx.emulatorVersion`.
+        environment["TERM_PROGRAM"] = "ghostty"
+        // Dropped rather than emitted empty when the emulator has no version to
+        // give: `TERM_PROGRAM_VERSION=` is a tool's problem to parse, and unset
+        // is the state every tool already handles.
+        environment["TERM_PROGRAM_VERSION"] = emulatorVersion.isEmpty ? nil : emulatorVersion
+        return environment
+    }
+
     /// Create a session running a plain login shell, with nobody attached.
     ///
     /// `zmx run` looks like the obvious way to do this and is wrong: it is task
@@ -315,27 +378,11 @@ extension Zmx {
         if let directory, FileManager.default.fileExists(atPath: directory) {
             process.currentDirectoryURL = URL(fileURLWithPath: directory)
         }
-        // The daemon inherits this process's environment, so anything set here
-        // lands in the session's shell and every child of it.
-        //
-        // Be clear what it can mean: only sessions *created* by this app get
-        // it. One made in a terminal and later shown in a pane will not, so
-        // `ZMXTERM` answers "did zmxterm make me", never "am I on screen".
-        // `ZMX_SESSION`, which zmx sets for every session however it was made,
-        // is the variable worth branching on.
-        //
-        // What is removed on the way in matters as much as what is added here —
-        // see `clientEnvironment(inheriting:)`, which is the only reason this
-        // call creates anything at all when the app was launched from a pane.
-        var environment = clientEnvironment(inheriting: ProcessInfo.processInfo.environment)
-        environment["ZMXTERM"] = "1"
-        environment["ZMXTERM_VERSION"] = Zmx.appVersion
-        environment["TERM"] = Zmx.terminalType
-        environment["COLORTERM"] = "truecolor"
-        // The convention Terminal.app, iTerm and Ghostty all follow, so shell
-        // configs that branch on the host have something to branch on.
-        environment["TERM_PROGRAM"] = "zmxterm"
-        environment["TERM_PROGRAM_VERSION"] = Zmx.appVersion
+        var environment = sessionEnvironment(
+            inheriting: ProcessInfo.processInfo.environment,
+            terminalType: Zmx.terminalType,
+            emulatorVersion: Zmx.emulatorVersion
+        )
 
         // Ghostty's shell integration, so the shell reports its working
         // directory and marks its prompts instead of the pane having to infer
@@ -362,6 +409,38 @@ extension Zmx {
     }
 
     static let appVersion = "0.8.0"
+
+    /// The version of the emulator this app claims to be, asked of the emulator
+    /// itself.
+    ///
+    /// `TERM_PROGRAM=ghostty` and `TERM_PROGRAM_VERSION` are read as a pair, so
+    /// pairing the name with `appVersion` would say "Ghostty 0.8.0" — a real
+    /// Ghostty, and a pre-1.0 one. That is the same failure this app's naming
+    /// was changed to avoid, only later in the conversation: a tool that
+    /// name-checks its way past the first gate and is then turned back by a
+    /// version gate, for a capability we demonstrably have.
+    ///
+    /// So it is `ghostty_info()`, not a constant tracking `Package.resolved`.
+    /// Both are truthful the day they are written; only this one is still
+    /// truthful after a dependency bump, because it is the linked library
+    /// answering rather than a number somebody has to remember to change. It
+    /// reports the full string including any pre-release suffix — trimming that
+    /// to look tidier would be inventing a precision the build does not have.
+    static let emulatorVersion: String = {
+        let info = ghostty_info()
+        guard info.version_len > 0,
+              let version = String(
+                  data: Data(bytes: info.version, count: Int(info.version_len)), encoding: .utf8
+              ), !version.isEmpty
+        else {
+            // Nothing sensible to claim. Say nothing rather than guess: the
+            // variable is dropped downstream, which reads as "unknown" instead
+            // of as a version that was never true.
+            Log.debug("ghostty_info reported no version")
+            return ""
+        }
+        return version
+    }()
 
     /// What to tell the shell it is talking to.
     ///
