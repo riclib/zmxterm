@@ -4,29 +4,44 @@ import SwiftUI
 
 /// The panels the right sidebar can show.
 ///
-/// One case today, and it was nearly two: the markdown preview this was built
-/// in anticipation of turned out to belong in a zmx session rather than in a
-/// panel — see `Reader`, and `CLAUDE.md`'s test of whether `zsm` could show it.
-/// The container still earns its shape, because whatever the second panel turns
-/// out to be is a case, an icon and one line in the `switch` in
-/// `InspectorView.panelBody`, with the header, the collapse rail, the width and
-/// the preference already working. Whatever a panel needs from the focused pane
-/// arrives the same way the files panel gets it: passed in.
+/// The container was built for a second panel — a case, an icon and a line in
+/// the `switch` in `InspectorView.panelBody`, with the header, the collapse
+/// rail, the width and the preference already working — and `daily` is it.
+/// (The markdown preview it was originally built in anticipation of turned out
+/// to belong in a zmx session instead; see `Reader`.) Whatever a panel needs
+/// from the focused pane arrives the same way the files panel gets it: passed
+/// in. `daily` needs nothing from it, which is allowed.
 enum InspectorPanel: String, CaseIterable, Identifiable {
     case files
+    case daily
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .files: "Files"
+        case .daily: "Today"
         }
     }
 
     var icon: String {
         switch self {
         case .files: "folder"
+        case .daily: "text.line.first.and.arrowtriangle.forward"
         }
+    }
+
+    /// Which panels exist *on this machine*, which is not the same as which
+    /// panels this build has.
+    ///
+    /// `daily` is offered only once somebody has configured a vault, and this
+    /// is the one place that decides it: the rail, the picker and the body all
+    /// read the same list, so a panel cannot be missing from the rail and still
+    /// reachable through a stale preference. Hiding it entirely is the point of
+    /// the feature rather than a nicety — most people have no daily note, and a
+    /// panel that greets them with an explanation of one is worse than no panel.
+    static func available(daily isConfigured: Bool) -> [InspectorPanel] {
+        allCases.filter { $0 != .daily || isConfigured }
     }
 }
 
@@ -58,8 +73,25 @@ struct InspectorView: View {
     /// against anything that moves with it stutters.
     @State private var dragBase: Double?
 
+    /// Today's note. Owned here rather than by `DailyPanel`, because whether
+    /// there is a daily panel at all is a question the rail and the picker ask
+    /// before any panel is built — and because a `@StateObject` inside a view
+    /// that only exists while its panel is selected would re-read the file
+    /// every time you switched tabs in this sidebar.
+    @StateObject private var daily = DailyMonitor()
+
+    private var panels: [InspectorPanel] {
+        InspectorPanel.available(daily: daily.settings != nil)
+    }
+
+    /// A stored preference can name a panel that is no longer available — the
+    /// vault moved, or the defaults were cleared with the sidebar open on
+    /// `daily` — so the selection is resolved against what exists rather than
+    /// trusted. Falling back to `.files` is the same rule `resolvedTab` follows
+    /// when a tab disappears from under the window.
     private var selectedPanel: InspectorPanel {
-        InspectorPanel(rawValue: panel) ?? .files
+        let chosen = InspectorPanel(rawValue: panel) ?? .files
+        return panels.contains(chosen) ? chosen : .files
     }
 
     var body: some View {
@@ -83,7 +115,7 @@ struct InspectorView: View {
     /// it and opens straight onto the one you pointed at.
     private var collapsedRail: some View {
         VStack(spacing: 4) {
-            ForEach(InspectorPanel.allCases) { item in
+            ForEach(panels) { item in
                 Button {
                     panel = item.rawValue
                     collapsed = false
@@ -105,10 +137,12 @@ struct InspectorView: View {
     private var header: some View {
         HStack(spacing: 6) {
             // A picker only once there is something to pick. With one panel it
-            // would be a segmented control of one, which reads as broken.
-            if InspectorPanel.allCases.count > 1 {
+            // would be a segmented control of one, which reads as broken — and
+            // on a machine with no daily note configured, one panel is exactly
+            // what there is.
+            if panels.count > 1 {
                 Picker("", selection: $panel) {
-                    ForEach(InspectorPanel.allCases) { item in
+                    ForEach(panels) { item in
                         Image(systemName: item.icon).tag(item.rawValue)
                     }
                 }
@@ -143,6 +177,8 @@ struct InspectorView: View {
             } else {
                 InspectorPlaceholder(text: "No pane focused")
             }
+        case .daily:
+            DailyPanel(monitor: daily)
         }
     }
 

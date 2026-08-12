@@ -208,9 +208,13 @@ icons have to read in monochrome.
 ## The inspector
 
 ⌥⌘B collapses the right sidebar the way ⌘B collapses the left, and to a strip of
-icons for the same reason. It holds panels about whatever the focused pane is
-looking at — one so far — so the container is an enum of panels and a `switch`,
-and the next one is a case rather than a rewrite.
+icons for the same reason. The container is an enum of panels and a `switch`, so
+the next one is a case rather than a rewrite — which is how the second arrived.
+Files is about whatever the focused pane is looking at; Today is about the day
+and follows nothing, which the container turned out not to mind. Which panels
+exist is decided in one place, because Today is offered only where it has been
+configured and a panel missing from the rail must not stay reachable through a
+stored preference.
 
 The file tree roots at the focused pane's working directory and follows it.
 Nothing polls: `TerminalViewState.workingDirectory` is `@Published` and
@@ -237,6 +241,56 @@ None of what is open is session state, which is the one rule: it describes a
 filesystem, `zsm` has no opinion about it, and it is nobody's label. What
 persists is whether the sidebar is open and how wide it is, in `@AppStorage`
 beside `railCollapsed`.
+
+## Today
+
+A second inspector panel: the last twelve **top-level** bullets of today's daily
+note, newest first, one truncated line each with the whole of it on hover.
+Clicking any line opens the note in whichever PKM app owns it.
+
+**It is invisible unless you configure it**, and that is the feature working
+rather than a caveat — most people have no daily note and should see no panel,
+no placeholder and no explanation. Unconfigured, the inspector has one panel and
+no picker, exactly as before.
+
+Top-level only, because the sub-bullets under each are the evidence and the top
+line is the claim. Newest first, because a daily note is appended to and the
+interesting end is the bottom. Fenced blocks are skipped, so a pasted shell
+transcript cannot contribute lines it never meant as bullets. Inline markdown is
+rendered where it is free — `AttributedString` handles bold and links and leaves
+`[[wikilinks]]` alone — and the floor under it is plain text: a real line in the
+note this was built against has its emphasis markers a word out of place, and
+markdown bolds the wrong half rather than failing, which is fine. What is not
+fine is a line that vanishes, and none does.
+
+Clicking opens the *note*, not the line. Neither app's scheme addresses a block,
+and a link claiming to would land somewhere else.
+
+**Adding a third app is a line, not a fork.** Almost none of the work is
+app-specific: finding the file is a vault root plus a path template with a date
+in it, and parsing is markdown. Only the URL differs, so an adapter is a name
+and a template with two holes in it:
+
+```swift
+Adapter(id: "obsidian", name: "Obsidian",
+        template: "obsidian://open?vault={vault}&file={path}")
+Adapter(id: "octarine", name: "Octarine",
+        template: "octarine://open?path={path}&workspace={vault}")
+```
+
+Both holes are percent-encoded against the unreserved set, so a `/` inside a
+parameter value becomes `%2F` and a note called `Q&A.md` stays one parameter.
+An app with no adapter still works today: write its URL template into
+`dailyAdapter` instead of a name, and anything containing `{path}` is read as
+one.
+
+Three things this gets right that are easy to get wrong. The path is re-resolved
+rather than watched, so **midnight moves it** to tomorrow's note by itself. The
+file is watched as well, because entries land as work does. And an **iCloud file
+that has been evicted** leaves a hidden `.name.md.icloud` placeholder where it
+was, which `fileExists` answers "no" to exactly as it does for a note nobody
+wrote — so that case asks for the download and says so, rather than reporting an
+empty day that is only an absent one.
 
 ## The reader
 
@@ -326,6 +380,8 @@ PaneModel.swift     a surface bound to a session; PaneStore caches them
 Views.swift         sidebar, rail, split canvas, pane chrome
 FileTree.swift      where the tree roots, listing order, visible rows, path → text
 InspectorView.swift the right sidebar, its panels, and the file tree's views
+Daily.swift         PKM adapters, today's note path, top-level bullets; the watcher
+DailyPanel.swift    twelve lines, newest first, each one a click into the app
 Reader.swift        the `reader=1` pane: the viewer rules, what gets typed, when it is stopped
 ReapPolicy.swift    which scratch panes are safe to destroy; the launch pass
 SelfTest.swift      headless tree and drag tests
@@ -420,6 +476,28 @@ defaults write land.liberato.zmxterm readerQuitKey q           # empty: signal i
 defaults write land.liberato.zmxterm flagFailedTasks -bool false
 defaults write land.liberato.zmxterm reapEphemeralOnLaunch -bool true
 ```
+
+The Today panel is four more, and it appears only once all four are there —
+three, for a template that names no vault:
+
+```sh
+defaults write land.liberato.zmxterm dailyAdapter octarine       # or obsidian, or a URL template
+defaults write land.liberato.zmxterm dailyVault Solid            # the name the app knows it by
+defaults write land.liberato.zmxterm dailyRoot ~/Library/Mobile\ Documents/iCloud~com~octarine~notes/Documents/Solid
+defaults write land.liberato.zmxterm dailyTemplate -string 'Daily/{yyyy-MM-dd}.md'
+```
+
+**`-string` is not optional on that last one.** `defaults` reads a bare value
+containing braces as an old-style plist and refuses it — `Could not parse:
+Daily/{yyyy-MM-dd}.md` — which looks like the app rejecting the template rather
+than the shell tool never having accepted it. Anything in braces is a
+`DateFormatter` pattern, in `en_US_POSIX` and the local time zone, so
+`{yyyy}/{MM}/{dd}.md` works as well as the one above.
+
+Setting some but not all of them leaves the panel hidden, deliberately and
+silently — a half-configured panel would be a list of lines that do nothing when
+clicked. `swift run zmxterm --selftest` prints which piece is missing, and that
+is what the line is there for.
 
 A `swift run` build is not the bundle, so its defaults domain is `zmxterm`
 rather than the bundle id.
