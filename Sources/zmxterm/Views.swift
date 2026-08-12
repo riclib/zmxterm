@@ -1,6 +1,7 @@
 import AppKit
 import GhosttyTerminal
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum Theme {
     /// The gap between panes. It has to be independent of whatever Ghostty
@@ -241,7 +242,8 @@ struct RootView: View {
                         registry: registry,
                         renamingPane: $renamingPane,
                         killingPane: $killingPane,
-                        focusRequest: focusRequest
+                        focusRequest: focusRequest,
+                        onRequestFocus: requestFocus
                     )
                     .padding(Theme.gap)
                 } else {
@@ -685,6 +687,10 @@ struct SplitCanvas: View {
     @Binding var renamingPane: ZmxSession?
     @Binding var killingPane: ZmxSession?
     let focusRequest: (pane: String, token: Int)
+    /// Granting the keyboard, as opposed to `focusRequest`, which only reports
+    /// what has already been granted. A dropped file asks for it — see
+    /// `PaneSurfaceView.dropped`.
+    let onRequestFocus: (String) -> Void
 
     private static let space = "zmxterm.splitCanvas"
 
@@ -714,6 +720,7 @@ struct SplitCanvas: View {
                         isSelected: selectedPane == placed.session.name,
                         focusToken: focusRequest.pane == placed.session.name ? focusRequest.token : 0,
                         onFocus: { select($0) },
+                        onRequestFocus: onRequestFocus,
                         menu: {
                             PaneMenu(
                                 pane: placed.session,
@@ -840,6 +847,10 @@ struct PaneSurfaceView: View {
     /// Raised when the surface itself takes focus — a click inside the
     /// terminal, or focus arriving from the sidebar.
     var onFocus: ((String) -> Void)?
+    /// Ask for the keyboard, rather than report having been given it. A drop
+    /// is the one gesture here that lands on a pane without clicking it, so it
+    /// is the one that has to ask — see `dropped`.
+    var onRequestFocus: ((String) -> Void)?
     /// The same menu the sidebar row shows, so a pane offers the same verbs
     /// wherever you happen to right-click it.
     @ViewBuilder var menu: () -> PaneMenu
@@ -860,6 +871,18 @@ struct PaneSurfaceView: View {
             RoundedRectangle(cornerRadius: Theme.cornerRadius)
                 .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
         )
+        // Files from Finder, inserted as paths (#13).
+        //
+        // A modifier on the pane rather than a view laid over it, which is the
+        // whole of why this does not cost a regression. An overlay would be a
+        // new hit-testable layer above the surface, and mouse-down is how the
+        // terminal starts a selection and how a divider starts a drag; a drop
+        // registration is a *different* event path — AppKit resolves a dragging
+        // destination by walking up from the view under the pointer to one that
+        // accepts the type, and libghostty's surface registers no dragged types
+        // at all, so the drag finds this and ordinary clicks never come here.
+        // Measured rather than assumed: see the commit.
+        .onDrop(of: [.fileURL], isTargeted: nil, perform: dropped)
         // Listen, never push. `TerminalSurfaceView.terminalFocused` is a
         // two-way binding, and its push half resigns first responder whenever
         // the binding reads false during an update — which it does on the very
@@ -877,6 +900,74 @@ struct PaneSurfaceView: View {
         .onReceive(model.terminal.$isFocused) { focused in
             guard focused else { return }
             onFocus?(session.name)
+        }
+    }
+
+    /// Insert the dropped files' paths at this pane's prompt.
+    ///
+    /// The paths go to *this* pane's model, which is what makes "the drop
+    /// targets a pane, not the window" true by construction rather than by
+    /// aiming: there is a `dropped` per pane and each closes over its own
+    /// session, so a drop cannot reach whichever pane happened to be focused.
+    /// Focus is then asked for, because the human is about to keep typing there
+    /// and the drop is the one gesture that lands on a pane without clicking
+    /// it.
+    ///
+    /// Relative to the pane's directory when the file is under it, absolute
+    /// otherwise, and quoted — all of that is `FileTree.insertion`, shared with
+    /// the tree's double-click so the same file cannot arrive as two different
+    /// strings depending on which gesture sent it. **No newline, ever.** This
+    /// inserts a command line for a person to finish; it does not run one.
+    ///
+    /// Returns true as soon as there is anything usable, before the paths have
+    /// been read. `NSItemProvider` is asynchronous and the answer here is "will
+    /// this pane take the drop", which is known immediately — reporting false
+    /// and inserting a moment later would draw the "rejected" animation over a
+    /// drop that worked.
+    private func dropped(_ providers: [NSItemProvider]) -> Bool {
+        let usable = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !usable.isEmpty else { return false }
+        Task { @MainActor in
+            var paths: [String] = []
+            // Sequentially, because the order is the person's selection order
+            // and a task group would return it in completion order.
+            for provider in usable {
+                guard let url = await provider.fileURL() else { continue }
+                paths.append(url.path)
+            }
+            guard !paths.isEmpty else { return }
+            let cwd = FileTree.rootPath(
+                workingDirectory: model.terminal.workingDirectory, startDir: session.startDir
+            )
+            let text = FileTree.insertion(for: paths, relativeTo: cwd)
+            Log.debug("drop on \(session.name): \(paths.count) file(s) → \(text)")
+            model.insert(text)
+            onRequestFocus?(session.name)
+        }
+        return true
+    }
+}
+
+extension NSItemProvider {
+    /// The dropped file's URL, however this provider chooses to spell it.
+    ///
+    /// Both shapes are load-bearing: Finder hands over a `file://` URL as a
+    /// `Data` blob under the `public.file-url` identifier, while a provider
+    /// built in-process — another view in this app, a test — may carry an
+    /// `NSURL` directly. Asking for one and not the other works until the day
+    /// it silently does not.
+    func fileURL() async -> URL? {
+        await withCheckedContinuation { continuation in
+            loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                switch item {
+                case let data as Data:
+                    continuation.resume(returning: URL(dataRepresentation: data, relativeTo: nil))
+                case let url as URL:
+                    continuation.resume(returning: url)
+                default:
+                    continuation.resume(returning: nil)
+                }
+            }
         }
     }
 }

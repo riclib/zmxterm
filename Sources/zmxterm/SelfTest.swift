@@ -822,6 +822,35 @@ enum SelfTest {
         expect("nothing inserted ends a line",
                insertion("/tmp/a/b.txt", "/tmp/a").contains("\n") ? "newline" : "none", "none")
 
+        // Several files at once — a multi-file drop from Finder (#13). The same
+        // rule per path, and the trailing space each already carries is what
+        // separates them, so nothing joins and nothing doubles.
+        func drop(_ paths: [String], _ cwd: String?) -> String {
+            FileTree.insertion(for: paths, relativeTo: cwd)
+        }
+        expect("several files are one command line",
+               drop(["/tmp/a/b.txt", "/tmp/a/c.txt"], "/tmp/a"), "b.txt c.txt ")
+        expect("each is quoted on its own",
+               drop(["/tmp/a/two words.txt", "/tmp/a/c.txt"], "/tmp/a"), "'two words.txt' c.txt ")
+        expect("inside and outside the directory can mix",
+               drop(["/tmp/a/b.txt", "/etc/hosts"], "/tmp/a"), "b.txt /etc/hosts ")
+        // Finder hands over a selection in the order it was made, and `cp a b`
+        // is not `cp b a`. Nothing here sorts.
+        expect("the order dropped is the order inserted",
+               drop(["/tmp/a/c.txt", "/tmp/a/b.txt"], "/tmp/a"), "c.txt b.txt ")
+        expect("dropping nothing inserts nothing", drop([], "/tmp/a"), "")
+        expect("one file is the same as the single-path rule",
+               drop(["/tmp/a/b.txt"], "/tmp/a"), insertion("/tmp/a/b.txt", "/tmp/a"))
+        // The hazard the ticket names: a filename may legally contain a
+        // newline, and an unquoted one would be a command that runs. Quoting is
+        // what defuses it — the newline lands *inside* the quotes, so the shell
+        // is still waiting for the close rather than executing anything.
+        let sneaky = drop(["/tmp/a/oops\nrm -rf ~"], "/tmp/a")
+        expect("a newline in a filename stays inside the quotes",
+               sneaky, "'oops\nrm -rf ~' ")
+        expect("and the quoting is what makes that safe",
+               sneaky.hasPrefix("'") && sneaky.hasSuffix("' ") ? "quoted" : "bare", "quoted")
+
         // Which rows are on screen. Lazily loaded means "expanded" and "listed"
         // are different states, and both are visible here.
         let treeRoot = FileEntry(path: "/r", name: "r", isDirectory: true)

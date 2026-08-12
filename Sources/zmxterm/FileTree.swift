@@ -222,6 +222,21 @@ enum FileTree {
         shellQuoted(relative(path, to: cwd)) + " "
     }
 
+    /// Several files at once — a multi-file drop from Finder (#13).
+    ///
+    /// Nothing joins them, because each insertion already carries the trailing
+    /// space that was put there for exactly this: `'a b.txt' c.txt ` is one
+    /// command line, and the last space leaves the cursor where the next word
+    /// goes. Adding a separator here would double it.
+    ///
+    /// Order is the order they arrived in rather than sorted. Finder hands over
+    /// the selection in the order it was made, and rearranging a person's
+    /// arguments for them is not this function's business — `cp a b` and
+    /// `cp b a` are different commands.
+    static func insertion(for paths: [String], relativeTo cwd: String?) -> String {
+        paths.map { insertion(for: $0, relativeTo: cwd) }.joined()
+    }
+
     /// Relative when the file is underneath the pane's directory, absolute
     /// otherwise, because that is what someone typing it would have written.
     /// A path that *is* the directory becomes `.`, which is the only spelling

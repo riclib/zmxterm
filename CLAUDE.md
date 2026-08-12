@@ -170,6 +170,26 @@ directory in PATH may contain very nearly anything, while an `$EDITOR` holding a
 newline is not a thing anybody has. Printed the other way round, a path with a
 newline in it silently eats the editor.
 
+**A drop target must be a modifier, never a view laid over the pane.**
+`.onDrop` on `PaneSurfaceView` adds a dragging-destination view that is
+transparent to hit testing, so mouse-down still reaches the terminal surface —
+which is how a selection starts, and how a divider drag starts. An overlay
+would be a new hit-testable layer above the surface and would take that click
+instead. Measured both ways with a probe: a hit-test of every point across the
+window returns the same view with the registration and without it. If you ever
+need a visible drop highlight, put it in an `.overlay` that is
+`.allowsHitTesting(false)`, and re-run that comparison.
+
+**Bracketed paste is not used, and cannot honestly be.** A dropped path is
+written to zmx as `.input` and never through libghostty's `sendText`, which is
+the only thing that knows whether the remote shell enabled mode 2004 — and
+`InMemoryTerminalSession` exposes no way to ask. Wrapping unconditionally would
+put a literal `ESC[200~` on the prompt of every shell that has it off. What
+makes an inserted path safe is the quoting: a filename containing a newline
+lands inside single quotes, so the shell waits for the close rather than running
+anything. Adding the wrap properly means tracking the mode out of the byte
+stream `PaneModel` already receives; do that or nothing, not a guess.
+
 ## Conventions
 
 Labels accept only `[A-Za-z0-9._-]`. Fold user input with `Zmx.slug`.

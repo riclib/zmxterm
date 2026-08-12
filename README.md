@@ -344,6 +344,45 @@ Double-clicking still inserts a path, for `.md` and everything else. Uniform
 behaviour beats special-casing by extension, and a gesture whose meaning depends
 on the file you aimed it at is one you have to think about first.
 
+## Dropping files from Finder
+
+Drop files or folders on a pane and their paths are inserted at its prompt, the
+way Terminal.app and Ghostty do. Several files insert several paths, space
+separated, in the order they were selected — nothing sorts them, because `cp a
+b` is not `cp b a`.
+
+It is the same `FileTree.insertion` the tree's double-click uses, so a file
+arrives as the same string whichever gesture sent it: relative when it is under
+the pane's directory, absolute otherwise, and shell-quoted. **Nothing is
+executed** — there is no trailing newline, the path lands at the cursor, and
+what to do with it is the human's decision.
+
+The drop goes to the pane under the pointer rather than to the window, and that
+pane then takes the keyboard. Targeting is by construction rather than by
+aiming: each pane has its own drop handler closed over its own session, so a
+drop cannot reach whichever pane happened to be focused.
+
+**It does not cost text selection or divider drags**, which was the risk worth
+checking rather than assuming — the same mouse-down that starts a selection in
+the terminal is the one a drop target could have swallowed. A drop registration
+is a different event path: AppKit resolves a dragging destination by walking up
+from the view under the pointer to one that accepts the type, and libghostty's
+surface registers no dragged types at all, so the drag finds the pane and
+ordinary clicks never do. Measured, not reasoned: with the registration and
+without it, a hit-test of every point across the window returns the same view,
+and the divider gesture reaches its commit identically.
+
+A filename may legally contain a newline, which would otherwise be a command
+that runs. Quoting is what defuses it rather than bracketed paste: the newline
+lands inside the single quotes and the shell waits for the close. Bracketed
+paste is deliberately **not** used, because it cannot be used honestly here —
+the app writes to zmx as `.input` and never through libghostty's `sendText`,
+which is the thing that knows whether the remote shell enabled mode 2004.
+Wrapping unconditionally would put literal `ESC[200~` on the prompt of every
+shell that has it off. Doing it properly means tracking the mode out of the
+byte stream we already receive; quoting makes that a refinement rather than a
+fix.
+
 ## The editor
 
 **Open in Editor** is next to Open in Reader on the same file, and is its
