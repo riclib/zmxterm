@@ -380,7 +380,7 @@ is opened, so an edit applies to the next one with no reload and no watcher:
 # patterns              command
 *.md *.markdown         mdv --watch {path}
 *.md *.markdown         glow -p {path}
-*.log *.jsonl  quit=^C  tail -f {path} | humanlog
+*.log *.jsonl  quit=^C  hl -P --follow {path}
 *                       bat --paging=always {path}
 ```
 
@@ -389,7 +389,7 @@ name, case-insensitively. **A rule whose viewer is not installed falls through
 to the next match** — no `mdv` and a `.md` opens in `glow`, or in `bat`;
 degrading to a worse viewer beats degrading to nothing, which is also why the
 same patterns appear twice above. A pipeline needs every binary it names, since
-a pane opening onto `humanlog: command not found` is exactly the empty reader
+a pane opening onto `hl: command not found` is exactly the empty reader
 this avoids.
 
 The patterns are separated from the command by **two or more spaces or a tab** —

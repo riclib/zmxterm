@@ -70,7 +70,7 @@ enum Reader {
 
         /// Every binary the rule needs, one per pipeline stage.
         ///
-        /// A pipeline is not a viewer: `tail -f {path} | humanlog` runs two
+        /// A pipeline is not a viewer: `tail -f {path} | hl -P` runs two
         /// programs and is only usable if both are there. Checking the first
         /// would fall through to nothing when `humanlog` is the missing half,
         /// and a pane opening onto `humanlog: command not found` is the empty
@@ -111,11 +111,21 @@ enum Reader {
     /// Two rules name the same patterns twice, which looks redundant and is the
     /// point: `mdv` is the viewer this was designed against, `glow` renders the
     /// same documents, and a machine with only one of them installed falls
-    /// through to the one it has. Same for `bat` and `less` at the bottom.
+    /// through to the one it has. Same for `bat` and `less` at the bottom, and
+    /// for logs, where `hl` formats structured lines and `tail -f` is what every
+    /// machine has.
+    ///
+    /// The log rules follow a file directly rather than piping `tail` into a
+    /// formatter. One process instead of two is not a style preference here:
+    /// identity is the pid of what we watched start, and a pipeline's foreground
+    /// process is whichever half `ps` happens to list first. `hl` needs `-P` for
+    /// this, because it pages by default and a pager would sit on a live follow
+    /// rather than streaming it.
     static let builtinConfig = """
     # patterns              command
     *.md *.markdown         mdv --watch {path}
     *.md *.markdown         glow -p {path}
+    *.log *.jsonl *.ndjson  quit=^C  hl -P --follow {path}
     *.log *.jsonl *.ndjson  quit=^C  tail -f {path}
     *                       bat --paging=always {path}
     *                       less {path}
