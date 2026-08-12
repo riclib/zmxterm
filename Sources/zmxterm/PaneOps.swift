@@ -114,6 +114,57 @@ enum PaneOps {
         return panes.contains { $0.tab == slug } ? .merge(into: slug) : .rename(to: slug)
     }
 
+    /// Every name a new tab cannot take.
+    ///
+    /// Two namespaces that look like one, and a new tab is the one operation
+    /// that touches both. What renders as a tab is decided by the `tab` labels,
+    /// so those names are spoken for; but a tab is created by creating a
+    /// *session* under that name, and a session's name is its socket path.
+    /// `zmx attach` aimed at a path that already exists does not make a second
+    /// session, it targets the first — so a session called `zaphod` sitting on
+    /// somebody else's wall under `tab=spike` still holds the name `zaphod`,
+    /// even though no tab is called that. Checking labels alone would call it
+    /// free and then quietly attach to it.
+    static func occupiedTabNames(among panes: [ZmxSession]) -> Set<String> {
+        Set(panes.map(\.tab)).union(panes.map(\.name))
+    }
+
+    /// What confirming the New Tab dialog would do, decided before anything is
+    /// created.
+    ///
+    /// Two questions, and neither is answerable from the typed string alone.
+    ///
+    /// The first is whether the tab is disposable. `ephemeral=1` used to be
+    /// written on every new tab because nobody had been asked, and the reaper
+    /// now reads it as "the user never named this", so the guess became
+    /// load-bearing. Taking the offered name is not naming anything — it is
+    /// the placeholder the app chose — so it stays disposable. Typing
+    /// something else is a deliberate name, and that is exactly what promotion
+    /// out of disposable means. An entry that folds to nothing is neither, so
+    /// it reads as accepting the proposal rather than as an error: there is no
+    /// useful nameless session to create, and refusing would be a dialog that
+    /// punishes an empty field.
+    ///
+    /// The second is whether the name is free, which matters more here than in
+    /// `renameTab`. A rename onto a taken name merges two tabs, which is at
+    /// least a thing somebody might want; a *create* onto a taken name does
+    /// not create at all, it targets the session already there. There is no
+    /// reading of "New Tab" that means "attach to the existing one", so this
+    /// one is refused and the caller is expected to say which name it was.
+    enum NewTab: Equatable {
+        /// Go ahead under this name, disposable or not.
+        case create(name: String, ephemeral: Bool)
+        /// Something already holds this name. Nothing was created.
+        case taken(String)
+    }
+
+    static func newTab(typed raw: String, proposed: String, among panes: [ZmxSession]) -> NewTab {
+        let slug = Zmx.slug(raw)
+        guard !slug.isEmpty, slug != proposed else { return .create(name: proposed, ephemeral: true) }
+        guard !occupiedTabNames(among: panes).contains(slug) else { return .taken(slug) }
+        return .create(name: slug, ephemeral: false)
+    }
+
     /// Each pane's share of the tab, filling in equal shares where `size` is
     /// absent so halving a pane means something even before anyone has dragged
     /// a divider.
