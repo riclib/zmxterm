@@ -11,7 +11,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-0.9.1}"
+VERSION="${VERSION:-0.10.0}"
 APP="zmxterm.app"
 BUILD="dist"
 BUNDLE_ID="land.liberato.zmxterm"
