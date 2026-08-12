@@ -130,3 +130,43 @@ positional.
 worth running. Anything expressible as a pure function over sessions and labels
 belongs there — tree reconstruction, drag maths, naming, slugging, icon rules.
 Keep it that way; a test that needs a running daemon will not get run.
+
+## Working on a ticket
+
+The ticket says what to build and why. This says how work happens here, so it
+does not have to be restated in every hand-off.
+
+**Work in a worktree, on a branch named for the ticket.** Never commit to
+`master` and never push; whoever dispatched you integrates, and a push races
+them. One commit per ticket, message ending `Closes #N`, body explaining *why*
+in the style of `git log` — explanatory prose, not a changelog.
+
+**You almost certainly cannot see the screen.** There is no screen-recording or
+accessibility permission on this machine, so `screencapture`, `osascript` and
+System Events all fail. You cannot click, drag, or press a key in the app. Do
+not try. Say plainly in your report which claims are measured and which are
+believed — a fix presented as certain that turns out wrong costs more than one
+flagged honestly.
+
+**So make the rules checkable instead.** `swift build && swift run zmxterm
+--selftest` runs without a window or a daemon, which is the whole reason it gets
+run. Anything expressible as a pure function belongs there. The count varies
+between runs because some checks enumerate live sessions; the invariant is zero
+failures. A temporary env-gated probe, run and then removed before committing,
+is a legitimate way to prove something the tests cannot reach — several
+features here were verified that way.
+
+**Other people's sessions are live work.** This machine runs real agents in zmx
+sessions alongside your test ones.
+
+- Never `zmx kill` a session you did not create. There is no undo.
+- Never relabel one you did not create. `pos`, `tab`, `size` and `title` are
+  somebody's layout, and `state` is how an agent signals it needs a human.
+- Never launch the app on a tab whose panes you did not make. Attaching resizes
+  those sessions and reflows their output.
+- Create test sessions under a prefix of your own and kill them when you finish:
+  `cd /tmp && env -u ZMX_SESSION zmx attach qaNN.a < /dev/null > /dev/null 2>&1`.
+  The `env -u` is not optional — see the `ZMX_SESSION` trap above.
+
+**Do not release.** No tags, no notarisation, no touching
+`/Applications/zmxterm.app`, no version bumps. Releases are cut deliberately.
