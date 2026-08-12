@@ -413,7 +413,7 @@ extension Zmx {
         process.waitUntilExit()
     }
 
-    static let appVersion = "0.11.0"
+    static let appVersion = "0.12.0"
 
     /// The version of the emulator this app claims to be, asked of the emulator
     /// itself.
