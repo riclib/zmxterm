@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Headless checks for the parts that don't need a window: position parsing and
@@ -1164,6 +1165,220 @@ enum SelfTest {
         print("note editor: \(editor)"
             + " [\(Reader.isInstalled(executable: Editor.executable(of: editor)) ? "installed" : "not installed")]"
             + " EDITOR=\(Reader.login.editor.isEmpty ? "<unset>" : Reader.login.editor)")
+        // MARK: Today's daily note
+
+        // Which file, and the reason the date is a parameter: "does the path
+        // change at midnight" cannot be asked of a function that reads the
+        // clock itself.
+        let lisbon = TimeZone(identifier: "Europe/Lisbon")!
+        func at(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int,
+                _ zone: TimeZone = lisbon) -> Date
+        {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            return calendar.date(from: DateComponents(
+                year: year, month: month, day: day, hour: hour, minute: minute
+            ))!
+        }
+        let template = "Daily/{yyyy-MM-dd}.md"
+        expect("today's note", Daily.relativePath(template, on: at(2026, 8, 12, 9, 0), timeZone: lisbon),
+               "Daily/2026-08-12.md")
+        expect("a minute before midnight is still today",
+               Daily.relativePath(template, on: at(2026, 8, 12, 23, 59), timeZone: lisbon),
+               "Daily/2026-08-12.md")
+        expect("a minute after it is tomorrow",
+               Daily.relativePath(template, on: at(2026, 8, 13, 0, 1), timeZone: lisbon),
+               "Daily/2026-08-13.md")
+        // The same instant, two zones. A daily note belongs to the local day,
+        // which is why the zone is a parameter rather than UTC.
+        expect("the day is the reader's, not the file's",
+               Daily.relativePath(template, on: at(2026, 8, 12, 23, 59), timeZone: lisbon),
+               Daily.relativePath(template, on: at(2026, 8, 13, 0, 59, TimeZone(identifier: "Europe/Riga")!),
+                                  timeZone: lisbon))
+        expect("several formats in one path",
+               Daily.relativePath("{yyyy}/{MM}/{dd}-log.md", on: at(2026, 8, 12, 9, 0), timeZone: lisbon),
+               "2026/08/12-log.md")
+        expect("a template with no date at all is a path",
+               Daily.relativePath("Inbox.md", on: at(2026, 8, 12, 9, 0), timeZone: lisbon), "Inbox.md")
+        // A typo comes back visible rather than swallowed, so the "no note"
+        // message names a path somebody can recognise as wrong.
+        expect("an unclosed brace stays literal",
+               Daily.relativePath("Daily/{yyyy-MM-dd.md", on: at(2026, 8, 12, 9, 0), timeZone: lisbon),
+               "Daily/{yyyy-MM-dd.md")
+        expect("root and note are joined once",
+               Daily.absolutePath(root: "/vault", relative: "Daily/x.md"), "/vault/Daily/x.md")
+
+        // The parse. Everything the panel shows is decided here.
+        let note = """
+        ## Solid
+
+        - The agents that build Solid now outlive the windows that show them
+          - Built overnight and shipped as [zmxterm](https://github.com/riclib/zmxterm)
+          - The agents drive it without being given an API
+
+        - **Solid's data projections can now grow new columns o**ver all previously collected history
+          - S-2169: the run timeline's step lanes now link to the child pipelines
+
+        + A plus is a bullet too
+        * And so is a star
+
+        ```sh
+        - this is a shell transcript, not an entry
+        ```
+
+        \t- a tab-indented bullet is somebody's detail
+          * so is this one
+        -no space, so not a bullet
+        ---
+        - [ ] a task is still an entry
+        """
+        func lines(_ bullets: [Daily.Bullet]) -> String {
+            bullets.map { String($0.text.prefix(24)) }.joined(separator: " | ")
+        }
+        expect("newest first, top level only, everything else ignored",
+               lines(Daily.bullets(in: note)),
+               "[ ] a task is still an e | And so is a star | A plus is a bullet too | "
+                   + "**Solid's data projectio | The agents that build So")
+        expect("nested bullets are not entries",
+               "\(Daily.bullets(in: note).contains { $0.text.hasPrefix("Built overnight") })", "false")
+        expect("nor is a line inside a fence",
+               "\(Daily.bullets(in: note).contains { $0.text.contains("shell transcript") })", "false")
+        expect("nor a marker with no space after it",
+               "\(Daily.bullets(in: note).contains { $0.text.contains("no space") })", "false")
+        // A fence closes on the character that opened it, so a ``` inside a
+        // ~~~ block does not end it early and swallow the rest of the note.
+        expect("a fence of one kind does not close on the other",
+               lines(Daily.bullets(in: "~~~\n```\n- inside\n~~~\n- outside")), "outside")
+        expect("fewer than twelve is all of them",
+               "\(Daily.bullets(in: "- a\n- b\n- c").count)", "3")
+        let many = (1 ... 20).map { "- entry \($0)" }.joined(separator: "\n")
+        expect("more than twelve stops at twelve", "\(Daily.bullets(in: many).count)", "12")
+        expect("and they are the last twelve, newest first",
+               lines(Daily.bullets(in: many)).components(separatedBy: " | ").first ?? "", "entry 20")
+        expect("a note with no bullets has none", "\(Daily.bullets(in: "# Title\n\nprose").count)", "0")
+
+        // Inline markdown, and the line that made it a requirement: the
+        // emphasis markers in the real note are a word out of place. Markdown
+        // does not reject that — it bolds the wrong half — and what matters is
+        // that every character still arrives.
+        func shown(_ markdown: String) -> String { String(Daily.attributed(markdown).characters) }
+        expect("markers are consumed, text is not",
+               shown("**Solid's data projections can now grow new columns o**ver all history"),
+               "Solid's data projections can now grow new columns over all history")
+        expect("a link keeps its label", shown("shipped as [zmxterm](https://example.com) today"),
+               "shipped as zmxterm today")
+        expect("a wikilink is left alone", shown("see [[Conventions]] for the rule"),
+               "see [[Conventions]] for the rule")
+        expect("an unterminated marker does not eat the line",
+               shown("half **bold and then nothing"), "half **bold and then nothing")
+        // Measured, and worth writing down rather than fixing: this parser
+        // reads `~x~` as strikethrough, so a *path* pasted into a bullet loses
+        // its tildes the way bold loses its asterisks. Every word survives —
+        // which is the promise — but the string is not the string. Escaping
+        // markdown before rendering markdown would be the wrong cure.
+        expect("a tilde pair is strikethrough like any other markup",
+               shown("iCloud~com~octarine~notes/Documents"), "iCloudcomoctarine~notes/Documents")
+        expect("and an unpaired one is left alone", shown("a ~ b"), "a ~ b")
+
+        // The URL, per adapter. Only this part is app-specific, and it is one
+        // line each — which is the claim the whole module rests on.
+        func opens(_ id: String, vault: String, path: String) -> String {
+            guard let adapter = Daily.adapter(named: id) else { return "<no adapter>" }
+            return Daily.url(adapter, vault: vault, path: path)?.absoluteString ?? "<no url>"
+        }
+        expect("Obsidian", opens("obsidian", vault: "Notes", path: "Daily/2026-08-12.md"),
+               "obsidian://open?vault=Notes&file=Daily%2F2026-08-12.md")
+        expect("Octarine", opens("octarine", vault: "Solid", path: "Daily/2026-08-12.md"),
+               "octarine://open?path=Daily%2F2026-08-12.md&workspace=Solid")
+        // Spaces are ordinary in a vault name and a note title, and `/` inside
+        // a parameter value has to be escaped or the app reads the query as
+        // structure. `.urlQueryAllowed` would pass both `/` and `&` through.
+        expect("a space in the vault name", opens("obsidian", vault: "My Vault", path: "a.md"),
+               "obsidian://open?vault=My%20Vault&file=a.md")
+        expect("a slash and an ampersand in the path",
+               opens("obsidian", vault: "v", path: "Daily/Q&A.md"),
+               "obsidian://open?vault=v&file=Daily%2FQ%26A.md")
+        expect("no vault name is refused rather than aimed at the wrong one",
+               opens("obsidian", vault: "", path: "a.md"), "<no url>")
+        expect("and an unknown app is not one", opens("notion", vault: "v", path: "a.md"), "<no adapter>")
+        // The escape hatch: an app nobody has written two lines for still works.
+        expect("a raw template is an adapter",
+               opens("logseq://x-callback-url/open?page={path}", vault: "", path: "Daily/a.md"),
+               "logseq://x-callback-url/open?page=Daily%2Fa.md")
+        expect("a raw template naming no vault needs none",
+               flag(Daily.adapter(named: "app://open?f={path}")?.needsVault == false), "yes")
+        expect("every built-in adapter builds a URL",
+               flag(Daily.adapters.allSatisfy {
+                   Daily.url($0, vault: "v", path: "Daily/a.md") != nil
+               }), "yes")
+
+        // Configuration, which is nothing until it is all there. Each missing
+        // piece hides the panel, and each says which piece it was — the
+        // diagnosis is for this report, because a feature that hides itself is
+        // otherwise impossible to debug.
+        func configured(_ adapter: String?, _ vault: String?, _ root: String?, _ path: String?) -> String {
+            Daily.settings(adapter: adapter, vault: vault, root: root, template: path) == nil
+                ? "hidden" : "shown"
+        }
+        expect("nothing set at all", configured(nil, nil, nil, nil), "hidden")
+        expect("everything set", configured("octarine", "Solid", "~/vault", "Daily/{yyyy-MM-dd}.md"), "shown")
+        expect("no root", configured("octarine", "Solid", nil, "Daily/{yyyy-MM-dd}.md"), "hidden")
+        expect("no template", configured("octarine", "Solid", "~/vault", nil), "hidden")
+        expect("an app that names a vault, with no vault named",
+               configured("octarine", "  ", "~/vault", "Daily/{yyyy-MM-dd}.md"), "hidden")
+        expect("a raw template that names none does not need one",
+               configured("app://open?f={path}", nil, "~/vault", "Daily/{yyyy-MM-dd}.md"), "shown")
+        expect("and the reason is sayable",
+               Daily.diagnosis(adapter: "octarine", vault: nil, root: "~/v", template: "d.md")
+                   .contains(Daily.vaultDefaultsKey) ? "named" : "vague", "named")
+        expect("a tilde is expanded, because a path template is not a shell",
+               Daily.settings(adapter: "octarine", vault: "S", root: "~/vault", template: "d.md")?
+                   .root.hasPrefix("/") == true ? "absolute" : "literal", "absolute")
+        // An SF Symbol that does not exist on this macOS draws nothing at all,
+        // and a rail button with no glyph is indistinguishable from a bug in
+        // the layout. Same check the pane icons get, for the same reason.
+        for item in InspectorPanel.allCases {
+            expect("panel icon \(item.icon) resolves",
+                   NSImage(systemSymbolName: item.icon, accessibilityDescription: nil) != nil
+                       ? "loaded" : "missing", "loaded")
+        }
+        expect("panels available with a daily note",
+               InspectorPanel.available(daily: true).map(\.rawValue).joined(separator: ","), "files,daily")
+        expect("and without one", InspectorPanel.available(daily: false).map(\.rawValue).joined(separator: ","),
+               "files")
+
+        // What is actually on disk, including the case that must never read as
+        // "no work today": an iCloud file that has been evicted leaves a hidden
+        // placeholder where it was, and `fileExists` says no to both that and a
+        // note that was never written.
+        let vault = FileManager.default.temporaryDirectory.appendingPathComponent("zmxterm-selftest-vault")
+        try? FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let present = vault.appendingPathComponent("2026-08-12.md").path
+        try? "- an entry".write(toFile: present, atomically: true, encoding: .utf8)
+        expect("a note that is there is read", describe(Daily.read(present)), "text")
+        expect("a note that was never written is missing",
+               describe(Daily.read(vault.appendingPathComponent("2026-08-11.md").path)), "missing")
+        let evicted = vault.appendingPathComponent("2026-08-10.md").path
+        expect("the placeholder is where iCloud leaves it",
+               (Daily.placeholderPath(for: evicted) as NSString).lastPathComponent, ".2026-08-10.md.icloud")
+        FileManager.default.createFile(atPath: Daily.placeholderPath(for: evicted), contents: Data())
+        expect("an evicted note is downloading, not absent", describe(Daily.read(evicted)), "downloading")
+        try? FileManager.default.removeItem(at: vault)
+
+        // What this machine would actually show, which depends on defaults
+        // nobody else has, so it reports rather than fails.
+        if let settings = Daily.settings {
+            let relative = Daily.relativePath(settings.template, on: Date())
+            let absolute = Daily.absolutePath(root: settings.root, relative: relative)
+            let state = Daily.read(absolute)
+            print("note daily: \(settings.adapter.name) \(settings.vault) → \(absolute) [\(describe(state))]")
+            if case let .text(markdown) = state {
+                print("note   \(Daily.bullets(in: markdown).count) of "
+                    + "\(Daily.bullets(in: markdown, limit: .max).count) top-level entries shown")
+            }
+        } else {
+            print("note daily: \(Daily.diagnosis(adapter: UserDefaults.standard.string(forKey: Daily.adapterDefaultsKey), vault: UserDefaults.standard.string(forKey: Daily.vaultDefaultsKey), root: UserDefaults.standard.string(forKey: Daily.rootDefaultsKey), template: UserDefaults.standard.string(forKey: Daily.templateDefaultsKey)))")
+        }
 
         // The round trip itself, which needs a daemon and so reports rather
         // than fails — the layout above was read off exactly these bytes, and
@@ -1207,6 +1422,18 @@ enum SelfTest {
     }
 
     private static func flag(_ value: Bool) -> String { value ? "yes" : "no" }
+
+    /// The state of a note file, named rather than dumped: `.text` carries the
+    /// whole note, and a failure message quoting seventeen kilobytes of
+    /// somebody's day helps nobody.
+    private static func describe(_ note: Daily.Note) -> String {
+        switch note {
+        case .missing: "missing"
+        case .downloading: "downloading"
+        case .text: "text"
+        case let .unreadable(reason): "unreadable: \(reason)"
+        }
+    }
 
     private static let configFixtures = FileManager.default.temporaryDirectory
         .appendingPathComponent("zmxterm-selftest-conf")

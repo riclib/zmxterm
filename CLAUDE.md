@@ -61,6 +61,15 @@ accepts the flag and returns everything. Filter with `grep`.
 with a `title` label; a *tab* really can be renamed, because its identity is the
 `tab` label.
 
+**A panel that can be absent is filtered in exactly one place.**
+`InspectorPanel.available` decides which panels exist on this machine, and the
+rail, the picker and the body all read it. Iterating `allCases` again anywhere
+— it is still `CaseIterable`, and it reads as the obvious thing to write —
+puts an unconfigured panel back in the rail. The stored `inspectorPanel`
+preference is re-resolved against the same list for the same reason: a
+preference naming a panel that is no longer available would otherwise render a
+body nobody can see the tab for.
+
 **Clear a shell's line with `^U`, never `^C`.** Sending a command into a pane
 that may have something on its prompt — the reader does, because a viewer that
 ignored its quit key echoed that key underneath itself — has to kill the line
