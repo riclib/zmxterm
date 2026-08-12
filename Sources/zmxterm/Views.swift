@@ -258,6 +258,7 @@ struct RootView: View {
                 // new: it is a pane of the tab being rendered, so the split
                 // canvas has already asked for the same object.
                 model: focusedPane.map { store.model(for: $0.name) },
+                registry: registry,
                 collapsed: $isInspectorCollapsed,
                 width: $inspectorWidth,
                 panel: $inspectorPanel

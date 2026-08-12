@@ -92,6 +92,11 @@ struct ZmxSession: Identifiable, Equatable {
 
     var isEphemeral: Bool { labels["ephemeral"] == "1" }
 
+    /// The pane documents open in. A bare flag rather than anything describing
+    /// the document, because the path is in argv and a path could not go in a
+    /// label anyway — the charset has no slash. See `Reader`.
+    var isReader: Bool { labels["reader"] == "1" }
+
     /// A human-chosen label. zmx cannot rename a session — the name is the
     /// socket path — so this is how a pane gets called something else.
     var title: String? { labels["title"] }

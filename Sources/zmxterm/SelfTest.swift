@@ -768,6 +768,85 @@ enum SelfTest {
                rowShape(FileTree.rows(root: treeRoot, children: listed, expanded: ["/r/loop"])),
                "d0 slow0 loop0! f.txt0")
 
+        // The reader. Everything that decides what gets typed into somebody's
+        // shell is a pure function, which is the only way to argue about it
+        // without a viewer installed and a document open.
+        let mdv = Reader.Configuration.default
+        expect("the default viewer", mdv.viewer, "mdv")
+        expect("a configured viewer with arguments",
+               Reader.Configuration(command: "glow -p", quitKey: "q").viewer, "glow")
+        expect("a viewer given by path is named by its last component",
+               Reader.Configuration(command: "/usr/local/bin/glow", quitKey: "q").viewer, "glow")
+        // The #22 workaround is a plausible thing to configure, and taking the
+        // first word blindly would name the viewer `TERM=xterm-kitty`.
+        expect("leading assignments are not the viewer",
+               Reader.Configuration(command: "TERM=xterm-kitty mdv --watch", quitKey: "q").viewer, "mdv")
+
+        expect("an unset command falls back",
+               Reader.configuration(command: nil, quitKey: nil).command, "mdv --watch")
+        expect("a blank command falls back too",
+               Reader.configuration(command: "   ", quitKey: nil).command, "mdv --watch")
+        expect("a configured command is taken as written",
+               Reader.configuration(command: "glow -p", quitKey: nil).command, "glow -p")
+        // Blank is a real answer for the quit key — "this viewer has none" —
+        // where blank for the command names nothing that could be run.
+        expect("an empty quit key is honoured rather than replaced",
+               "[" + Reader.configuration(command: nil, quitKey: "").quitKey + "]", "[]")
+
+        expect("a document becomes a command line",
+               Reader.commandLine(mdv, opening: "/tmp/a/notes.md"), "mdv --watch /tmp/a/notes.md")
+        expect("a path with a space is quoted",
+               Reader.commandLine(mdv, opening: "/tmp/a/two words.md"), "mdv --watch '/tmp/a/two words.md'")
+        // ^U kills whatever the quit key left on the prompt; \r is Return.
+        expect("what actually reaches the pty",
+               visible(Reader.keystrokes(mdv, opening: "/tmp/a/notes.md")),
+               "^U mdv --watch /tmp/a/notes.md CR")
+
+        expect("an idle reader is typed into", plan(nil), "start")
+        expect("the viewer is quit first", plan("mdv"), "swap")
+        expect("case does not decide it", plan("MDV"), "swap")
+        // The pane is still a shell somebody can use. Typing a quit key and a
+        // command line into a stranger is the one outcome worth refusing.
+        expect("a stranger in the reader is refused", plan("vim"), "busy vim")
+        expect("with no viewer configured nothing is quit",
+               describe(Reader.plan(foreground: "mdv", configuration: .init(command: "", quitKey: "q"))),
+               "busy mdv")
+
+        // Which pane a document goes to, and the promise that a second document
+        // does not build a second reader.
+        let readerPanes = [
+            labelled("zaphod.shell-1", ["tab": "zaphod"]),
+            labelled("zaphod.shell-2", ["tab": "zaphod", "reader": "1"]),
+            labelled("ford.shell-1", ["tab": "ford", "reader": "1"]),
+        ]
+        expect("the tab's reader is found",
+               Reader.pane(among: readerPanes, tab: "zaphod")?.name ?? "<none>", "zaphod.shell-2")
+        expect("another tab's reader is not borrowed",
+               Reader.pane(among: readerPanes, tab: "marvin")?.name ?? "<none>", "<none>")
+        expect("a tab with no reader has none",
+               Reader.pane(among: [readerPanes[0]], tab: "zaphod")?.name ?? "<none>", "<none>")
+        expect("reader is a bare flag", flag(readerPanes[1].isReader), "yes")
+        expect("and absent means not one", flag(readerPanes[0].isReader), "no")
+
+        // What the panel says when nothing opened. Each of these is a thing to
+        // go and fix, so each has to name it.
+        expect("opening reports no problem", Reader.Outcome.opened(pane: "x").problem ?? "<none>", "<none>")
+        expect("a busy reader names what is in it",
+               Reader.Outcome.busy(pane: "zaphod.shell-2", running: "vim").problem?
+                   .contains("running vim") == true ? "named" : "vague", "named")
+        expect("a missing viewer names the defaults key",
+               Reader.Outcome.missingViewer("mdv").problem?
+                   .contains("readerCommand") == true ? "named" : "vague", "named")
+
+        // What this build would actually run — the one part of the reader that
+        // depends on the machine, so it reports rather than fails. It answers
+        // the two questions a failed Open in Reader raises: which viewer did it
+        // try, and can the login shell find it.
+        let effective = Reader.configuration
+        print("note reader: \(effective.command) → viewer \(effective.viewer), "
+            + "quit \(effective.quitKey.isEmpty ? "<signal only>" : effective.quitKey), "
+            + "installed \(flag(Reader.isInstalled(effective)))")
+
         // The round trip itself, which needs a daemon and so reports rather
         // than fails — the layout above was read off exactly these bytes, and
         // the cheapest way to notice a zmx release moving a field is to see the
@@ -810,6 +889,27 @@ enum SelfTest {
     }
 
     private static func flag(_ value: Bool) -> String { value ? "yes" : "no" }
+
+    /// Control characters spelled out, because the two that matter here — the
+    /// `^U` that clears the prompt and the `\r` that submits — are invisible in
+    /// a failure message otherwise, and "expected: mdv, actual: mdv" is not a
+    /// test result anybody can act on.
+    private static func visible(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{15}", with: "^U ")
+            .replacingOccurrences(of: "\r", with: " CR")
+    }
+
+    private static func plan(_ foreground: String?) -> String {
+        describe(Reader.plan(foreground: foreground, configuration: .default))
+    }
+
+    private static func describe(_ plan: Reader.Plan) -> String {
+        switch plan {
+        case .start: "start"
+        case .swap: "swap"
+        case let .busy(name): "busy \(name)"
+        }
+    }
 
     private static func env(_ added: [String: String]) -> String {
         added.isEmpty ? "<none>" : added.keys.sorted().map { "\($0)=\(added[$0]!)" }.joined(separator: ", ")

@@ -23,6 +23,16 @@ struct PaneMenu: View {
         Divider()
 
         Button("Rename…") { renaming = pane }
+        // Which pane documents open in is a choice about this tab, and the only
+        // way to make it other than letting the first Open in Reader split one
+        // for you. A tab keeps one — that is what "stable panel" means — so
+        // marking a second pane leaves the first still labelled and the tab
+        // resolving to whichever sorts first; unmark the one you don't want.
+        if pane.isReader {
+            Button("Stop Using as Reader") { registry.setReader(false, on: pane.name) }
+        } else {
+            Button("Use as Reader") { registry.setReader(true, on: pane.name) }
+        }
         if pane.isEphemeral {
             Button("Keep") { registry.setEphemeral(false, on: pane.name) }
         } else {
