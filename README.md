@@ -613,6 +613,9 @@ FileTree.swift      where the tree roots, listing order, visible rows, path → 
 InspectorView.swift the right sidebar, its panels, and the file tree's views
 Daily.swift         PKM adapters, today's note path, top-level bullets; the watcher
 DailyPanel.swift    twelve lines, newest first, each one a click into the app
+Usage.swift         quota adapters, the generic cache schema, which groups to show
+UsageMonitor.swift  rereads those caches; a reader, never a fetcher
+UsageFooter.swift   the meters at the foot of the sidebar
 Reader.swift        the `reader=1` pane: the viewer rules, what gets typed, when it is stopped
 Editor.swift        Open in Editor: which editor, and why it is never the reader's pane
 ReapPolicy.swift    which scratch panes are safe to destroy; the launch pass
@@ -685,20 +688,41 @@ of what is actually known.
 
 ### Quota
 
-The foot of the sidebar shows the account's five-hour, weekly and per-model
-limits — three lines expanded, three pie wedges collapsed. White under 50%,
-yellow to 75, orange to 85, red above.
+The foot of the sidebar shows each running provider's meters — three lines
+expanded, three pie wedges collapsed. White under 50%, yellow to 75, orange to
+85, red above. A provider whose panes have all closed keeps its numbers while
+the cache is still fresh, then disappears, so the footer does not become a wall
+of other people's quotas.
 
-These numbers are the account's, not the session's, so they are identical in
-every Claude pane: a statusline per terminal spends a line of every pane saying
-the same thing, and showing them once in the chrome gives that line back.
+These numbers are the account's, not the session's. Showing them once in the
+chrome gives back the line every pane would otherwise spend saying the same
+thing.
 
-It is a reader, not a fetcher. `~/.claude/statusline.sh` already refreshes
-`/tmp/claude/statusline-usage-cache.json` at most once a minute, so there is no
-token to find, no API call to make, and no way for this app to spend anyone's
-rate limit. The cost is that the file only moves while some Claude session is
-rendering, so a cache nobody has refreshed in five minutes is dimmed rather than
-presented as current.
+It is a reader, not a fetcher. Each provider writes a cache; the app never
+finds a token or calls an API, so it cannot spend anyone's rate limit. A cache
+nobody has refreshed in five minutes is dimmed rather than presented as
+current, and that staleness is per provider.
+
+Claude's cache is the one that already exists:
+`/tmp/claude/statusline-usage-cache.json`, refreshed by `~/.claude/statusline.sh`
+at most once a minute. Its shape is Claude's, and the app still speaks that.
+
+Everyone else writes the same small file:
+
+```json
+{
+  "meters": [
+    { "id": "cur", "label": "cur", "percent": 42, "reset": "4:00pm" },
+    { "id": "wk", "label": "wk", "percent": 10, "resets_at": "2026-08-18T21:00:00Z" }
+  ]
+}
+```
+
+`percent` is required. `id` and `label` default to each other. `reset` is
+already formatted; `resets_at` is an ISO-8601 fallback. The path is
+`/tmp/<provider>/usage.json` — Grok is `/tmp/grok/usage.json`, Codex is
+`/tmp/codex/usage.json`. Adding a producer is writing that file. Adding a
+*provider the app does not know* is a line in `Usage.providers`.
 
 ### Protocol notes
 

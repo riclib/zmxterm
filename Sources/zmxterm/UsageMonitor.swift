@@ -12,27 +12,20 @@ struct UsageMeter: Identifiable, Equatable {
     let reset: String?
 }
 
-/// Account-level quota, read from the cache Claude Code's own statusline keeps.
+/// File I/O for `Usage`. The decisions live in that enum so `--selftest` can
+/// argue about them without a disk; this type just rereads the caches and
+/// publishes whatever parsed.
 ///
-/// These numbers are identical in every Claude pane — they're the account's,
-/// not the session's — so a statusline per terminal spends a line of every pane
-/// saying the same thing. Showing them once in the chrome gives that line back.
-///
-/// Deliberately a reader, not a fetcher: `~/.claude/statusline.sh` already
-/// refreshes `/tmp/claude/statusline-usage-cache.json` at most once a minute,
-/// so there's no token to find, no API call to make, and no way for this app to
-/// spend anyone's rate limit. The cost is that the file only moves while some
-/// Claude session is rendering, so a stale file is reported rather than shown
-/// as current.
+/// Still a reader, not a fetcher: each provider's own script refreshes its
+/// file, so there is no token to find and no way for this app to spend
+/// anyone's rate limit.
 @MainActor
 final class UsageMonitor: ObservableObject {
-    @Published private(set) var meters: [UsageMeter] = []
-    @Published private(set) var isStale = false
-
-    private static let cacheURL = URL(fileURLWithPath: "/tmp/claude/statusline-usage-cache.json")
-    /// The script refreshes on a 60s cycle; well past that means nothing is
-    /// running to refresh it.
-    private static let staleAfter: TimeInterval = 5 * 60
+    @Published private(set) var caches: [String: Usage.Cache] = [:]
+    /// Bumped on every poll so the footer re-asks "is this stale?" even when
+    /// the files themselves have not moved. Without it a cache that ages past
+    /// five minutes would stay drawn as current until a pane appeared or left.
+    @Published private(set) var checkedAt = Date()
 
     private var timer: Timer?
 
@@ -46,62 +39,26 @@ final class UsageMonitor: ObservableObject {
     deinit { timer?.invalidate() }
 
     func refresh() {
-        guard let data = try? Data(contentsOf: Self.cacheURL),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            if !meters.isEmpty { meters = [] }
-            return
-        }
-
-        let modified = (try? Self.cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate ?? .distantPast
-        let stale = Date().timeIntervalSince(modified) > Self.staleAfter
-        if stale != isStale { isStale = stale }
-
-        var found: [UsageMeter] = []
-
-        if let window = root["five_hour"] as? [String: Any], let pct = window["utilization"] as? Double {
-            found.append(UsageMeter(
-                id: "cur", label: "cur", percent: pct,
-                reset: Self.format(window["resets_at"] as? String, style: .time)
-            ))
-        }
-        if let week = root["seven_day"] as? [String: Any], let pct = week["utilization"] as? Double {
-            found.append(UsageMeter(
-                id: "wk", label: "wk", percent: pct,
-                reset: Self.format(week["resets_at"] as? String, style: .date)
-            ))
-        }
-        // Per-model limits arrive as a list keyed by display name rather than
-        // as fixed fields, so the interesting one has to be looked up.
-        if let limits = root["limits"] as? [[String: Any]] {
-            for limit in limits {
-                guard let percent = limit["percent"] as? Double,
-                      let scope = limit["scope"] as? [String: Any],
-                      let model = scope["model"] as? [String: Any],
-                      let name = model["display_name"] as? String
-                else { continue }
-                found.append(UsageMeter(id: name, label: name.lowercased(), percent: percent, reset: nil))
+        var next: [String: Usage.Cache] = [:]
+        for provider in Usage.providers {
+            let url = URL(fileURLWithPath: provider.cachePath)
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            guard let cache = Usage.read(provider: provider, data: data, modified: modified) else {
+                Log.debug("usage: \(provider.id) cache malformed, dropped")
+                continue
             }
+            next[provider.id] = cache
         }
 
-        Log.debug("usage: " + found.map { "\($0.label)=\(Int($0.percent.rounded()))%\($0.reset.map { " (" + $0 + ")" } ?? "")" }.joined(separator: " · ") + (stale ? " [stale]" : ""))
-        if found != meters { meters = found }
-    }
-
-    private enum ResetStyle { case time, date }
-
-    private static func format(_ iso: String?, style: ResetStyle) -> String? {
-        guard let iso else { return nil }
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = parser.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else { return nil }
-
-        let out = DateFormatter()
-        out.dateFormat = style == .time ? "h:mma" : "MMM d"
-        out.amSymbol = "am"
-        out.pmSymbol = "pm"
-        return out.string(from: date).lowercased()
+        let summary = next.keys.sorted().map { id in
+            let cache = next[id]!
+            return id + "[" + cache.meters.map { "\($0.label)=\(Int($0.percent.rounded()))%" }.joined(separator: " · ") + "]"
+        }.joined(separator: " ")
+        Log.debug("usage: " + (summary.isEmpty ? "none" : summary))
+        if next != caches { caches = next }
+        checkedAt = Date()
     }
 }
 

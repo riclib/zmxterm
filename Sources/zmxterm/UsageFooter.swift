@@ -1,33 +1,56 @@
 import SwiftUI
 
 /// Quota at the foot of the sidebar: three lines expanded, three pies collapsed.
+///
+/// One provider looks the way it always did. Two or more get a name above
+/// each group so a Claude five-hour and a Grok five-hour cannot be mistaken
+/// for each other. Staleness is per provider: a quiet Grok cache must not
+/// dim Claude's numbers.
 struct UsageFooter: View {
-    let meters: [UsageMeter]
+    let groups: [Usage.Group]
     let collapsed: Bool
-    let isStale: Bool
 
     var body: some View {
-        guard !meters.isEmpty else { return AnyView(EmptyView()) }
+        guard !groups.isEmpty else { return AnyView(EmptyView()) }
 
+        let named = groups.count > 1
         return AnyView(
             VStack(alignment: collapsed ? .center : .leading, spacing: collapsed ? 8 : 5) {
                 Divider().padding(.bottom, 2)
-                ForEach(meters) { meter in
-                    if collapsed {
-                        UsagePie(meter: meter)
-                            .frame(width: 22, height: 22)
-                            .help("\(meter.label) \(Int(meter.percent.rounded()))%")
-                    } else {
-                        UsageLine(meter: meter)
+                ForEach(groups) { group in
+                    if named, !collapsed {
+                        Text(group.provider.name)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, group.id == groups.first?.id ? 0 : 4)
+                    }
+                    ForEach(group.meters) { meter in
+                        if collapsed {
+                            UsagePie(meter: meter)
+                                .frame(width: 22, height: 22)
+                                .help(help(group, meter))
+                                .opacity(group.isStale ? 0.4 : 1)
+                        } else {
+                            UsageLine(meter: meter)
+                                .opacity(group.isStale ? 0.4 : 1)
+                                .help(group.isStale ? staleHelp(group) : "")
+                        }
                     }
                 }
             }
             .padding(.horizontal, collapsed ? 4 : 8)
             .padding(.bottom, 8)
-            // A cache nobody is refreshing is old news, not current news.
-            .opacity(isStale ? 0.4 : 1)
-            .help(isStale ? "No Claude session has refreshed usage recently" : "")
         )
+    }
+
+    private func help(_ group: Usage.Group, _ meter: UsageMeter) -> String {
+        let reading = "\(meter.label) \(Int(meter.percent.rounded()))%"
+        let named = groups.count > 1 ? "\(group.provider.name) \(reading)" : reading
+        return group.isStale ? "\(named) — \(staleHelp(group))" : named
+    }
+
+    private func staleHelp(_ group: Usage.Group) -> String {
+        "No \(group.provider.name) session has refreshed usage recently"
     }
 }
 

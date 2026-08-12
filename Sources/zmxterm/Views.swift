@@ -518,7 +518,10 @@ struct SidebarView: View {
             tabList
             Spacer(minLength: 0)
             newTabButton
-            UsageFooter(meters: usage.meters, collapsed: collapsed, isStale: usage.isStale)
+            UsageFooter(
+                groups: Usage.visible(caches: usage.caches, sessions: tabs.flatMap(\.panes), now: usage.checkedAt),
+                collapsed: collapsed
+            )
         }
         .background(Theme.chrome)
     }
