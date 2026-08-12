@@ -29,8 +29,15 @@ enum PaneIcon {
         Rule(match: "solid", asset: "solid", includesDirectory: true),
     ]
 
+    /// What a pane is running, which is what identifies an agent. Usage
+    /// meters use the same haystack so a Claude pane and a Grok pane cannot
+    /// disagree about whose quota they are.
+    static func runningText(for pane: ZmxSession) -> String {
+        (pane.command + " " + pane.name).lowercased()
+    }
+
     static func asset(for pane: ZmxSession) -> String {
-        let running = (pane.command + " " + pane.name).lowercased()
+        let running = runningText(for: pane)
         let located = (running + " " + pane.startDir).lowercased()
         let matched = rules.first { $0.includesDirectory ? located.contains($0.match) : running.contains($0.match) }
         return matched?.asset ?? "terminal"

@@ -1417,6 +1417,143 @@ enum SelfTest {
             print("note daily: \(Daily.diagnosis(adapter: UserDefaults.standard.string(forKey: Daily.adapterDefaultsKey), vault: UserDefaults.standard.string(forKey: Daily.vaultDefaultsKey), root: UserDefaults.standard.string(forKey: Daily.rootDefaultsKey), template: UserDefaults.standard.string(forKey: Daily.templateDefaultsKey)))")
         }
 
+        // MARK: Usage meters
+
+        // The decisions that used to live inside a Claude-only reader: which
+        // cache is whose, whether a pane counts as running that provider, and
+        // whether a group belongs in the footer. All pure, all the cases the
+        // ticket named.
+
+        func parseClaude(_ json: String) -> String {
+            describe(Usage.parseClaude(Data(json.utf8)))
+        }
+        func parseMeters(_ json: String) -> String {
+            describe(Usage.parseMeters(Data(json.utf8)))
+        }
+        func shown(
+            _ caches: [(Usage.Provider, String, TimeInterval)],
+            sessions: [ZmxSession],
+            now: Date = Date(timeIntervalSince1970: 1_000_000),
+            staleAfter: TimeInterval = 300
+        ) -> String {
+            var read: [String: Usage.Cache] = [:]
+            for (provider, json, age) in caches {
+                let modified = now.addingTimeInterval(-age)
+                if let cache = Usage.read(provider: provider, data: Data(json.utf8), modified: modified) {
+                    read[provider.id] = cache
+                }
+            }
+            return describe(Usage.visible(
+                providers: caches.map(\.0),
+                caches: read,
+                sessions: sessions,
+                now: now,
+                staleAfter: staleAfter
+            ))
+        }
+
+        let claude = Usage.providers.first { $0.id == "claude" }!
+        let grok = Usage.providers.first { $0.id == "grok" }!
+        let claudeJSON = """
+        {"five_hour":{"utilization":12.0,"resets_at":"2026-08-12T22:20:00.062295+00:00"},\
+        "seven_day":{"utilization":20,"resets_at":"2026-08-18T21:00:00Z"},\
+        "limits":[\
+        {"kind":"session","percent":12,"scope":null},\
+        {"kind":"weekly_scoped","percent":16,"scope":{"model":{"display_name":"Fable"}}}\
+        ]}
+        """
+        let grokJSON = """
+        {"meters":[{"id":"cur","label":"cur","percent":40,"reset":"4:00pm"},\
+        {"id":"wk","label":"wk","percent":10}]}
+        """
+
+        expect("claude five-hour is cur", parseClaude(claudeJSON).contains("cur=12") ? "yes" : parseClaude(claudeJSON), "yes")
+        expect("claude week is wk", parseClaude(claudeJSON).contains("wk=20") ? "yes" : parseClaude(claudeJSON), "yes")
+        expect("claude model limit is the display name",
+               parseClaude(claudeJSON).contains("fable=16") ? "yes" : parseClaude(claudeJSON), "yes")
+        expect("a limit without a model is not a meter",
+               parseClaude(claudeJSON).contains("session") ? "leaked" : "skipped", "skipped")
+        expect("an integer utilization still parses",
+               parseClaude(#"{"seven_day":{"utilization":20}}"#), "wk=20")
+        expect("claude garbage is not a cache", parseClaude("not json"), "<none>")
+        expect("claude empty object is an empty list, not a failure", parseClaude("{}"), "<empty>")
+
+        expect("generic meters parse", parseMeters(grokJSON), "cur=40@4:00pm,wk=10")
+        expect("generic id defaults to the label",
+               parseMeters(#"{"meters":[{"label":"win","percent":3}]}"#), "win=3")
+        expect("generic label defaults to the id",
+               parseMeters(#"{"meters":[{"id":"win","percent":3}]}"#), "win=3")
+        expect("generic resets_at is formatted",
+               parseMeters(#"{"meters":[{"id":"cur","percent":1,"resets_at":"2026-08-18T21:00:00Z"}]}"#)
+                   .contains("cur=1@") ? "yes" : parseMeters(#"{"meters":[{"id":"cur","percent":1,"resets_at":"2026-08-18T21:00:00Z"}]}"#),
+               "yes")
+        expect("a meter missing percent is skipped, the rest stay",
+               parseMeters(#"{"meters":[{"id":"bad"},{"id":"ok","percent":7}]}"#), "ok=7")
+        expect("a file that is not the schema is dropped", parseMeters(#"{"five_hour":{"utilization":1}}"#), "<none>")
+        expect("not json is dropped", parseMeters("nope"), "<none>")
+        expect("an array is not the schema", parseMeters(#"[1,2,3]"#), "<none>")
+
+        expect("no session and no cache is hidden",
+               shown([(claude, "not json", 10)], sessions: [running("sh", "/bin/zsh")]), "<none>")
+        expect("a session but no cache is hidden",
+               shown([(claude, "not json", 10)], sessions: [running("dev", "claude --model opus")]), "<none>")
+        expect("a fresh cache with no session still shows",
+               shown([(claude, claudeJSON, 10)], sessions: [running("sh", "/bin/zsh")]),
+               "claude[cur=12,wk=20,fable=16]")
+        expect("a stale cache with no session is hidden",
+               shown([(claude, claudeJSON, 400)], sessions: [running("sh", "/bin/zsh")]), "<none>")
+        expect("a session and a stale cache is shown dimmed",
+               shown([(claude, claudeJSON, 400)], sessions: [running("dev", "claude")]), "claude![cur=12,wk=20,fable=16]")
+        expect("a session and a fresh cache is shown live",
+               shown([(claude, claudeJSON, 10)], sessions: [running("dev", "claude")]), "claude[cur=12,wk=20,fable=16]")
+        expect("two providers at once keep their own meters",
+               shown(
+                   [(claude, claudeJSON, 10), (grok, grokJSON, 10)],
+                   sessions: [running("c", "claude"), running("g", "grok chat")]
+               ),
+               "claude[cur=12,wk=20,fable=16] grok[cur=40,wk=10]")
+        expect("staleness is per provider",
+               shown(
+                   [(claude, claudeJSON, 10), (grok, grokJSON, 400)],
+                   sessions: [running("c", "claude"), running("g", "grok")]
+               ),
+               "claude[cur=12,wk=20,fable=16] grok![cur=40,wk=10]")
+        expect("a malformed cache drops that provider, not the footer",
+               shown(
+                   [(claude, "nope", 10), (grok, grokJSON, 10)],
+                   sessions: [running("c", "claude"), running("g", "grok")]
+               ),
+               "grok[cur=40,wk=10]")
+        expect("closing the last pane keeps a fresh cache",
+               shown([(grok, grokJSON, 30)], sessions: [running("sh", "zsh")]),
+               "grok[cur=40,wk=10]")
+        expect("and hides it once the cache is stale",
+               shown([(grok, grokJSON, 400)], sessions: [running("sh", "zsh")]), "<none>")
+
+        expect("a claude command matches the Claude provider",
+               flag(Usage.matches(running("pane", "claude --model opus"), provider: claude)), "yes")
+        expect("and not the Grok one",
+               flag(Usage.matches(running("pane", "claude --model opus"), provider: grok)), "no")
+        expect("a grok command matches Grok",
+               flag(Usage.matches(running("pane", "grok chat"), provider: grok)), "yes")
+        expect("the session name is enough, the way the icon is",
+               flag(Usage.matches(running("spike.claude", "zsh"), provider: claude)), "yes")
+        expect("a directory called claude is not a Claude pane",
+               flag(Usage.matches(
+                   ZmxSession(name: "sh", pid: "1", clients: 1, startDir: "/tmp/claude", command: "zsh", labels: [:]),
+                   provider: claude
+               )), "no")
+        // The same fact as the icon: what it runs, not where.
+        expect("usage and the icon agree about a Claude pane",
+               flag(Usage.matches(running("pane", "claude"), provider: claude)
+                    && PaneIcon.asset(for: running("pane", "claude")) == "claudecode"), "yes")
+
+        expect("every built-in provider has a path of its own",
+               flag(Set(Usage.providers.map(\.cachePath)).count == Usage.providers.count), "yes")
+        expect("claude is still the statusline cache, not the generic file",
+               claude.cachePath, "/tmp/claude/statusline-usage-cache.json")
+        expect("grok is the documented generic path", grok.cachePath, "/tmp/grok/usage.json")
+
         // The round trip itself, which needs a daemon and so reports rather
         // than fails — the layout above was read off exactly these bytes, and
         // the cheapest way to notice a zmx release moving a field is to see the
@@ -1576,6 +1713,32 @@ enum SelfTest {
 
     private static func session(_ name: String) -> ZmxSession {
         ZmxSession(name: name, pid: "1", clients: 1, startDir: "/tmp", command: "zsh", labels: [:])
+    }
+
+    /// A pane identified by what it is running, which is what usage matching
+    /// looks at. The name is just a label so failures stay readable.
+    private static func running(_ name: String, _ command: String) -> ZmxSession {
+        ZmxSession(name: name, pid: "1", clients: 1, startDir: "/tmp", command: command, labels: [:])
+    }
+
+    private static func describe(_ meters: [UsageMeter]?) -> String {
+        guard let meters else { return "<none>" }
+        if meters.isEmpty { return "<empty>" }
+        return meters.map { meter in
+            meter.label + "=" + String(Int(meter.percent.rounded())) + (meter.reset.map { "@" + $0 } ?? "")
+        }.joined(separator: ",")
+    }
+
+    private static func describe(_ groups: [Usage.Group]) -> String {
+        if groups.isEmpty { return "<none>" }
+        return groups.map { group in
+            // Resets are timezone-formatted, so visibility checks name the
+            // meters and the stale bit, not the clock.
+            let meters = group.meters.map {
+                $0.label + "=" + String(Int($0.percent.rounded()))
+            }.joined(separator: ",")
+            return group.provider.id + (group.isStale ? "!" : "") + "[" + meters + "]"
+        }.joined(separator: " ")
     }
 
     /// A directory listing as names in the order the tree would draw them.

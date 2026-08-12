@@ -189,6 +189,14 @@ window returns the same view with the registration and without it. If you ever
 need a visible drop highlight, put it in an `.overlay` that is
 `.allowsHitTesting(false)`, and re-run that comparison.
 
+**Usage meters are a reader, never a fetcher.** `Usage` decides which
+provider groups belong in the footer from caches plus the live session list;
+`UsageMonitor` only rereads the files. Do not add an API call, a token lookup,
+or a Claude-only shortcut. A provider whose cache is malformed is dropped;
+the rest of the footer stays up. Matching uses `PaneIcon.runningText` — command
+and name, never the directory — so a team inside one repo cannot all inherit
+the same quota.
+
 **Bracketed paste is not used, and cannot honestly be.** A dropped path is
 written to zmx as `.input` and never through libghostty's `sendText`, which is
 the only thing that knows whether the remote shell enabled mode 2004 — and
