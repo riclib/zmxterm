@@ -1278,12 +1278,19 @@ enum SelfTest {
         // ~~~ block does not end it early and swallow the rest of the note.
         expect("a fence of one kind does not close on the other",
                lines(Daily.bullets(in: "~~~\n```\n- inside\n~~~\n- outside")), "outside")
-        expect("fewer than twelve is all of them",
-               "\(Daily.bullets(in: "- a\n- b\n- c").count)", "3")
+        expect("a short day is all of it", "\(Daily.bullets(in: "- a\n- b\n- c").count)", "3")
+        // The cap of twelve is gone with the truncation that made it necessary:
+        // the panel has a column and scrolls, and silently dropping the
+        // thirteenth thing somebody did today is worse than a scrollbar.
         let many = (1 ... 20).map { "- entry \($0)" }.joined(separator: "\n")
-        expect("more than twelve stops at twelve", "\(Daily.bullets(in: many).count)", "12")
-        expect("and they are the last twelve, newest first",
+        expect("a long day is all of it too", "\(Daily.bullets(in: many).count)", "20")
+        // Newest first keeps its check whatever the count does: it is the one
+        // property a reordering refactor could silently invert, and the panel
+        // would still look plausible with the day upside down.
+        expect("the newest is first",
                lines(Daily.bullets(in: many)).components(separatedBy: " | ").first ?? "", "entry 20")
+        expect("and the oldest is last",
+               lines(Daily.bullets(in: many)).components(separatedBy: " | ").last ?? "", "entry 1")
         expect("a note with no bullets has none", "\(Daily.bullets(in: "# Title\n\nprose").count)", "0")
 
         // Inline markdown, and the line that made it a requirement: the
@@ -1402,8 +1409,9 @@ enum SelfTest {
             let state = Daily.read(absolute)
             print("note daily: \(settings.adapter.name) \(settings.vault) → \(absolute) [\(describe(state))]")
             if case let .text(markdown) = state {
-                print("note   \(Daily.bullets(in: markdown).count) of "
-                    + "\(Daily.bullets(in: markdown, limit: .max).count) top-level entries shown")
+                let entries = Daily.bullets(in: markdown)
+                let longest = entries.map(\.text.count).max() ?? 0
+                print("note   \(entries.count) top-level entries, longest \(longest) characters")
             }
         } else {
             print("note daily: \(Daily.diagnosis(adapter: UserDefaults.standard.string(forKey: Daily.adapterDefaultsKey), vault: UserDefaults.standard.string(forKey: Daily.vaultDefaultsKey), root: UserDefaults.standard.string(forKey: Daily.rootDefaultsKey), template: UserDefaults.standard.string(forKey: Daily.templateDefaultsKey)))")

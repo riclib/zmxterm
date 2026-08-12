@@ -325,21 +325,28 @@ enum Daily {
         }
     }
 
-    /// The last `limit` top-level bullets, newest first.
+    /// Every top-level bullet in the note, newest first.
     ///
     /// **Top-level only, at column zero.** The sub-bullets under each are the
-    /// evidence; the top line is the claim, and the claims are what a panel this
-    /// size can hold. An indented bullet is somebody's supporting detail and is
-    /// deliberately not promoted by having a short parent.
+    /// evidence; the top line is the claim, and the panel is a list of what
+    /// changed rather than a copy of the note. An indented bullet is somebody's
+    /// supporting detail and is deliberately not promoted by having a short
+    /// parent.
     ///
     /// **Newest first**, because a daily note is appended to and the interesting
     /// end is the bottom.
+    ///
+    /// **All of them.** There used to be a cap of twelve here, and it was a
+    /// concession to a panel that might have lived in a footer under the usage
+    /// meters. It has a column, so the list is as long as the day was, and
+    /// silently dropping the thirteenth thing somebody did today would be a
+    /// worse answer than a scrollbar.
     ///
     /// Fenced blocks are skipped, so a shell transcript pasted into the note
     /// cannot contribute `- name` lines it never meant as bullets. Both fence
     /// spellings count, and a fence closes on the same character it opened with,
     /// which is what stops a ``` inside a ~~~ block from ending it early.
-    static func bullets(in markdown: String, limit: Int = 12) -> [Bullet] {
+    static func bullets(in markdown: String) -> [Bullet] {
         var found: [Bullet] = []
         var fence: Character?
 
@@ -365,7 +372,7 @@ enum Daily {
             found.append(Bullet(id: index + 1, text: text))
         }
 
-        return found.suffix(limit).reversed()
+        return found.reversed()
     }
 
     /// Inline markdown, with plain text as the floor.
@@ -417,9 +424,6 @@ final class DailyMonitor: ObservableObject {
     @Published private(set) var note: Daily.Note = .missing
     @Published private(set) var bullets: [Daily.Bullet] = []
 
-    /// How many lines the panel holds. Twelve, then stop.
-    static let limit = 12
-
     private var source: DispatchSourceFileSystemObject?
     private var watchedPath: String?
     private var timer: Timer?
@@ -457,7 +461,7 @@ final class DailyMonitor: ObservableObject {
         if read != note { note = read }
 
         let parsed: [Daily.Bullet] = if case let .text(markdown) = read {
-            Daily.bullets(in: markdown, limit: Self.limit)
+            Daily.bullets(in: markdown)
         } else {
             []
         }

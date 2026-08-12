@@ -1,11 +1,19 @@
 import AppKit
 import SwiftUI
 
-/// The last twelve top-level lines of today's daily note, newest first.
+/// Today's daily note as a stack of cards, one per top-level bullet, newest
+/// first.
 ///
 /// Nothing here follows the focused pane, which makes it the first inspector
 /// panel that is about the *day* rather than about a session — the container
 /// was built for a second panel and this is what it turned out to be.
+///
+/// It was originally twelve truncated lines with the rest behind a tooltip, and
+/// both halves of that were concessions to a panel that might have lived in a
+/// footer under the usage meters. It has a column. A 300-character bullet
+/// clipped to one line, with the remainder only reachable by hovering, is
+/// strictly worse than the same bullet laid out — so the cards wrap, and every
+/// entry of the day is here.
 ///
 /// It draws only when `Daily.settings` is set, and the panel is not offered at
 /// all otherwise: see `InspectorPanel.available`. Most people have no daily note
@@ -72,14 +80,17 @@ struct DailyPanel: View {
         }
     }
 
+    /// As long as the day was. `LazyVStack` builds only the cards on screen,
+    /// which matters more here than it did at twelve: a note is appended to all
+    /// day and nothing caps it.
     private var entries: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: Theme.gap) {
                 ForEach(monitor.bullets) { bullet in
-                    DailyRow(bullet: bullet, onOpen: open)
+                    DailyCard(bullet: bullet, onOpen: open)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(Theme.gap)
         }
     }
 
@@ -97,13 +108,25 @@ struct DailyPanel: View {
     }
 }
 
-/// One line: markdown rendered where it is free, truncated to a line, with the
-/// whole of it on hover.
+/// One entry, whole: markdown rendered where it is free, wrapped to as many
+/// lines as it takes.
 ///
-/// These lines are long — 300 characters is ordinary — so the tooltip is not a
-/// nicety, it is the only way to read one. `.help` on the row rather than on the
-/// text, so the hover target is the same shape as the click target.
-private struct DailyRow: View {
+/// The chrome is the app's own — `Theme.groupCard` on `Theme.chrome`, at
+/// `Theme.cornerRadius`, spaced by `Theme.gap` — which is exactly what a tab
+/// group in the left rail and a pane in the split canvas are made of. A card
+/// invented here would be a widget dropped into the application; this is the
+/// application.
+///
+/// **There is no tooltip, and that is the change.** It used to carry the text
+/// the truncation hid, and with the whole line on screen it would only repeat
+/// what you are already reading. What it also did, by accident, was be the one
+/// thing that responded to the pointer — so the affordance it was carrying is
+/// replaced deliberately and doubled: the card takes an accent border under the
+/// pointer, and the cursor becomes the pointing hand, which is the strongest
+/// "this opens something" signal macOS has. Which app the click opens does not go here
+/// either; it is in the header, permanently, rather than in a tooltip that
+/// fires once per card as you read down a day's work.
+private struct DailyCard: View {
     let bullet: Daily.Bullet
     let onOpen: () -> Void
 
@@ -112,18 +135,45 @@ private struct DailyRow: View {
     var body: some View {
         Text(bullet.rendered)
             .font(.system(size: 11))
-            .lineLimit(1)
-            .truncationMode(.tail)
+            // No `lineLimit`: the whole point is that the line is all here.
+            // `.fixedSize` vertically is what makes a `Text` in a `LazyVStack`
+            // take the height its wrapping needs instead of one line's worth.
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(isHovering ? Color.primary.opacity(0.07) : .clear)
+                RoundedRectangle(cornerRadius: Theme.cornerRadius)
+                    .fill(Theme.groupCard)
+            )
+            // The hover state, which is now the only thing saying this is a
+            // click target. An overlay stroke rather than a different fill:
+            // changing the fill would make the card look like a *different kind*
+            // of card — the rail already uses fill to mean selected and
+            // `failedCard` to mean something went wrong — where a border reads
+            // as "this one, now".
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cornerRadius)
+                    .strokeBorder(Color.accentColor.opacity(isHovering ? 0.7 : 0), lineWidth: 1)
             )
             .contentShape(Rectangle())
-            .onHover { isHovering = $0 }
+            .onHover { hovering in
+                isHovering = hovering
+                // push/pop rather than set, the same discipline the divider
+                // handles use: the system resets the cursor on every
+                // mouse-moved event, so a plain `set` flickers.
+                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+            // A push with no pop leaves the pointing hand stuck over the whole
+            // window, and unlike the divider handles these cards *do* vanish
+            // from under the pointer: the list is rebuilt whenever the note
+            // changes, and the note changes while somebody is reading it. So
+            // the pop happens on the way out however the way out happens.
+            .onDisappear {
+                guard isHovering else { return }
+                isHovering = false
+                NSCursor.pop()
+            }
             .onTapGesture(perform: onOpen)
-            .help(bullet.text)
     }
 }

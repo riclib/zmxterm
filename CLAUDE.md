@@ -101,6 +101,15 @@ deliberate intent only.
 **Never animate pane frames.** An implicit animation makes panes chase the
 pointer during a divider drag instead of tracking it.
 
+**A cursor is pushed on hover and popped on the way out — including the way out
+where the view is destroyed.** `NSCursor.push()` on `onHover(true)` and `pop()`
+on `onHover(false)` is right for a divider, which is always there; it is not
+enough for anything in a list that is rebuilt under the pointer, because a view
+removed while hovered never sees `onHover(false)` and the pushed cursor sticks
+over the whole window. The daily cards pop on `onDisappear` as well, and their
+list is replaced whenever the note on disk changes, which is while somebody is
+reading it.
+
 **Divider drags use the pointer's absolute `location`, never `translation`.**
 A handle measured by its own translation reports in a coordinate space that
 moves with it, and stutters. Commit `size` labels on mouse-up, never during —

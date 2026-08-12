@@ -244,9 +244,20 @@ beside `railCollapsed`.
 
 ## Today
 
-A second inspector panel: the last twelve **top-level** bullets of today's daily
-note, newest first, one truncated line each with the whole of it on hover.
-Clicking any line opens the note in whichever PKM app owns it.
+A second inspector panel: every **top-level** bullet of today's daily note,
+newest first, one card each showing the whole line wrapped. Clicking a card
+opens the note in whichever PKM app owns it.
+
+The cards are the app's own chrome — `Theme.groupCard` at `Theme.cornerRadius`,
+spaced by `Theme.gap` — which is what a tab group in the rail and a pane in the
+canvas are already made of, so the panel reads as the same application rather
+than a widget dropped into it. Under the pointer a card takes an accent border
+and the cursor becomes the pointing hand: with the full text on screen there is
+no tooltip left to say a card is clickable, so the hover state says it instead.
+
+It was twelve truncated lines to begin with, both halves of that a concession to
+a panel that might have lived under the usage meters. It has a column, so the
+list is as long as the day was and scrolls.
 
 **It is invisible unless you configure it**, and that is the feature working
 rather than a caveat — most people have no daily note and should see no panel,
@@ -265,6 +276,9 @@ fine is a line that vanishes, and none does.
 
 Clicking opens the *note*, not the line. Neither app's scheme addresses a block,
 and a link claiming to would land somewhere else.
+
+A morning with no note yet is the normal state, not an error, and says so
+quietly.
 
 **Adding a third app is a line, not a fork.** Almost none of the work is
 app-specific: finding the file is a vault root plus a path template with a date
