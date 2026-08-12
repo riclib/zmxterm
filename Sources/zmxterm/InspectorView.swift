@@ -288,7 +288,8 @@ struct FilesPanel: View {
                         onToggle: { tree.toggle(row) },
                         onSelect: { tree.selected = row.entry.path },
                         onInsert: { insert(row.entry) },
-                        onOpenInReader: { openInReader(row.entry) }
+                        onOpenInReader: { openInReader(row.entry) },
+                        onOpenInEditor: { openInEditor(row.entry) }
                     )
                 }
             }
@@ -341,6 +342,22 @@ struct FilesPanel: View {
         readerProblem = outcome.problem
     }
 
+    /// Open in Editor, which shares this panel's alert and nothing else.
+    ///
+    /// No viewer list is read: the editor is not chosen by file type, so there
+    /// is no rules file to complain about and nothing to report but whether the
+    /// pane opened. The path is absolute for the same reason as above — the new
+    /// pane's shell starts wherever the pane it was split from is, which is not
+    /// necessarily where the tree is rooted.
+    private func openInEditor(_ entry: FileEntry) {
+        tree.selected = entry.path
+        let outcome = registry.openInEditor(
+            path: entry.path, tab: pane.tab, near: pane.name, store: store
+        )
+        Log.debug("open in editor from \(pane.name): \(entry.path) → \(outcome)")
+        readerProblem = outcome.problem
+    }
+
     private static var reportedViewerProblem: String?
 }
 
@@ -358,6 +375,7 @@ private struct FileTreeRow: View {
     let onSelect: () -> Void
     let onInsert: () -> Void
     let onOpenInReader: () -> Void
+    let onOpenInEditor: () -> Void
 
     var body: some View {
         HStack(spacing: 4) {
@@ -391,6 +409,10 @@ private struct FileTreeRow: View {
             // against. Directories are excluded because no viewer takes one.
             if !row.entry.isDirectory {
                 Button("Open in Reader") { onOpenInReader() }
+                // Next to the reader because they answer the same question
+                // about the same file, and distinct because they are opposites:
+                // this one always gets a pane of its own. See `Editor`.
+                Button("Open in Editor") { onOpenInEditor() }
             }
             Button("Insert Path") { onInsert() }
         }

@@ -290,6 +290,45 @@ Double-clicking still inserts a path, for `.md` and everything else. Uniform
 behaviour beats special-casing by extension, and a gesture whose meaning depends
 on the file you aimed it at is one you have to think about first.
 
+## The editor
+
+**Open in Editor** is next to Open in Reader on the same file, and is its
+opposite in the way that matters: it opens **a new pane every time**. The reader
+is a stable panel whose point is that the next document replaces the last; an
+editor holds a buffer somebody is typing into, and replacing that would be the
+worst thing this app could do. So there is no `editor=1` label, nothing is
+looked up, and nothing is reused — Open in Editor splits a pane exactly as the
+Split menu item does and then forgets about it.
+
+Nothing ever sends a quit key to it, either. The reader has a careful
+stop-then-signal dance because it means to reuse the pane; there is nothing here
+to clear, and typing a quit key at somebody's vim is precisely the accident this
+design avoids. Closing the editor is the user's business.
+
+The editor is **the login shell's `$EDITOR`, falling back to `vim`**, and asking
+the shell is deliberate: someone who has set `EDITOR` has already answered this
+question, and a second place to answer it is a second place for the two to
+disagree. It is read from the same one interactive-shell call that resolves the
+PATH the viewers are checked against, so it costs nothing. `$EDITOR` is taken as
+a command line rather than a binary, so `code -w` keeps its argument, and the
+command runs in the pane's shell — a wrapper script or a shell function works if
+the shell resolves it.
+
+```sh
+defaults write land.liberato.zmxterm editorCommand "hx {path} +10"   # overrides $EDITOR
+```
+
+Same shape as `readerCommand`: `{path}` where the file goes, or nothing and it
+is appended. The path is absolute and quoted with the same rule the tree inserts
+paths with, so a filename with a space in it cannot mean one thing in one menu
+item and something else in the other.
+
+The new pane is `ephemeral=1` like any split, and the reaper reads that
+correctly without being told: its "something other than a login shell is
+running" veto protects an editor with unsaved work in it, and once you quit the
+editor the pane is an ordinary idle shell, which is exactly when it should be
+reapable.
+
 ## Layout and dragging
 
 Pane frames are computed in one pass (`PaneLayout.compute`) rather than by a
@@ -327,6 +366,7 @@ Views.swift         sidebar, rail, split canvas, pane chrome
 FileTree.swift      where the tree roots, listing order, visible rows, path → text
 InspectorView.swift the right sidebar, its panels, and the file tree's views
 Reader.swift        the `reader=1` pane: the viewer rules, what gets typed, when it is stopped
+Editor.swift        Open in Editor: which editor, and why it is never the reader's pane
 ReapPolicy.swift    which scratch panes are safe to destroy; the launch pass
 SelfTest.swift      headless tree and drag tests
 bin/zmx-state       the attention hook
@@ -417,6 +457,7 @@ which still stands as an unconditional rule when there is no file:
 ```sh
 defaults write land.liberato.zmxterm readerCommand "glow -p"   # superseded by the file
 defaults write land.liberato.zmxterm readerQuitKey q           # empty: signal it instead
+defaults write land.liberato.zmxterm editorCommand "hx"        # unset: $EDITOR, then vim
 defaults write land.liberato.zmxterm flagFailedTasks -bool false
 defaults write land.liberato.zmxterm reapEphemeralOnLaunch -bool true
 ```

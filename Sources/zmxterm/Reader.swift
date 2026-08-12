@@ -84,20 +84,30 @@ enum Reader {
         /// identity: identity is the pid we watched start — see `plan`.
         var viewer: String { Reader.viewer(of: command) }
 
-        /// The command line for a document. The path is quoted rather than
-        /// escaped because it is going into a shell — `FileTree.shellQuoted` is
-        /// the same rule the file tree inserts paths with, so a path with a
-        /// space in it cannot arrive as two different strings depending on which
-        /// gesture sent it. Absolute, not relative: the reader's shell is not
-        /// necessarily sitting in the directory the tree is rooted at.
+        /// The command line for a document.
         func commandLine(opening path: String) -> String {
-            let quoted = FileTree.shellQuoted(path)
-            guard command.contains(Reader.pathPlaceholder) else { return command + " " + quoted }
-            return command.replacingOccurrences(of: Reader.pathPlaceholder, with: quoted)
+            Reader.commandLine(command, opening: path)
         }
     }
 
     static let pathPlaceholder = "{path}"
+
+    /// A command line with the file in it. The path is quoted rather than
+    /// escaped because it is going into a shell — `FileTree.shellQuoted` is the
+    /// same rule the file tree inserts paths with, so a path with a space in it
+    /// cannot arrive as two different strings depending on which gesture sent
+    /// it. Absolute, not relative: the pane's shell is not necessarily sitting
+    /// in the directory the tree is rooted at.
+    ///
+    /// Not a method on `Rule` any more, because #26's editor is not a rule and
+    /// needs exactly this: the same quoting, the same append-when-there-is-no
+    /// -`{path}`. A second implementation of "where does the file go" is how a
+    /// filename with a space comes to work in one menu item and not the other.
+    static func commandLine(_ command: String, opening path: String) -> String {
+        let quoted = FileTree.shellQuoted(path)
+        guard command.contains(pathPlaceholder) else { return command + " " + quoted }
+        return command.replacingOccurrences(of: pathPlaceholder, with: quoted)
+    }
 
     // MARK: - The list
 
@@ -459,7 +469,16 @@ enum Reader {
     /// sent in the same write would take the command with it — which is why the
     /// stop and this are always two separate sends, whatever the stop is.
     static func keystrokes(_ rule: Rule, opening path: String) -> String {
-        "\u{15}" + rule.commandLine(opening: path) + "\r"
+        keystrokes(command: rule.command, opening: path)
+    }
+
+    /// The same, for a command that is not a rule — #26's editor. The `^U` is
+    /// pointless on the freshly created pane an editor always gets and is kept
+    /// anyway: it costs one byte into a prompt that is empty, and the day
+    /// something does leave a character there, the alternative is an editor
+    /// launching under a mangled name.
+    static func keystrokes(command: String, opening path: String) -> String {
+        "\u{15}" + commandLine(command, opening: path) + "\r"
     }
 
     // MARK: - What opening a document requires
@@ -537,23 +556,55 @@ enum Reader {
     /// somebody's prompt framework. Once, lazily, is affordable; a rule list
     /// names several viewers and a pipeline names two binaries in one rule, so
     /// per lookup it would not be.
-    static let loginPath: [String] = {
+    /// What the pane's shell says about itself: where it would find a program,
+    /// and which editor its owner has already chosen.
+    ///
+    /// Both come out of one `-ilc` because the expensive part is starting the
+    /// shell, not what it is asked. Resolving `$EDITOR` separately would pay
+    /// that ~525ms a second time to read a variable the first shell had open in
+    /// front of it.
+    struct LoginShell {
+        var path: [String]
+        /// `$EDITOR` as the shell reports it — a command line, not a binary. It
+        /// may name arguments (`code -w`) or be empty, and it is the shell's
+        /// answer rather than this process's: a GUI launched from the Dock
+        /// inherits no `EDITOR` at all, which is exactly the case that made
+        /// asking the shell worth doing.
+        var editor: String
+    }
+
+    static let login: LoginShell = {
         let shell = ShellIntegration.loginShell()
         // `-i` as well as `-l`; see above. `printf` rather than `echo` so a
         // PATH containing a backslash survives.
-        let raw = ForegroundProcess.shell(shell, ["-ilc", #"printf %s "$PATH""#])
-        let entries = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        //
+        // Editor first and PATH second, split on the first newline, because
+        // only one of the two can safely be the remainder: a directory in PATH
+        // may contain very nearly anything, while an `$EDITOR` holding a
+        // newline is not a thing anybody has. Printed the other way round, a
+        // path with a newline in it would silently eat the editor.
+        let raw = ForegroundProcess.shell(shell, ["-ilc", #"printf '%s\n%s' "$EDITOR" "$PATH""#])
+        let halves = raw.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        let editor = halves.first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let entries = (halves.count > 1 ? String(halves[1]) : "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: ":").map(String.init).filter { !$0.isEmpty }
-        Log.debug("login PATH: \(entries.count) entries via \(shell)")
+        Log.debug("login shell \(shell): \(entries.count) PATH entries, EDITOR=\(editor.isEmpty ? "<unset>" : editor)")
         // A shell that answered nothing leaves us worse off than the
         // environment we already have, so fall back rather than resolving
         // nothing at all.
         guard !entries.isEmpty else {
-            return (ProcessInfo.processInfo.environment["PATH"] ?? "")
-                .split(separator: ":").map(String.init)
+            return LoginShell(
+                path: (ProcessInfo.processInfo.environment["PATH"] ?? "")
+                    .split(separator: ":").map(String.init),
+                editor: editor
+            )
         }
-        return entries
+        return LoginShell(path: entries, editor: editor)
     }()
+
+    static var loginPath: [String] { login.path }
 
     /// A rule can run here only if every stage of it can.
     static func isInstalled(_ rule: Rule, searching path: [String] = Reader.loginPath) -> Bool {
@@ -608,6 +659,10 @@ enum Reader {
         case busy(pane: String, running: String)
         /// Rules matched the file and none of their viewers is installed.
         case missingViewer([String])
+        /// #26's editor, named and not found. One editor rather than a list,
+        /// because there is no falling through to a second choice: the editor
+        /// is whatever the user already told their shell they use.
+        case missingEditor(String)
         /// No rule matched at all. Names the file, since the rules are globs.
         case noRule(String)
         /// No pane to split, so there is nowhere to put a reader.
@@ -625,6 +680,14 @@ enum Reader {
                 \(tried.isEmpty ? "The viewer" : tried.joined(separator: ", ")) \
                 \(tried.count == 1 ? "is" : "are") not installed, or not on the login shell's PATH. \
                 Install one, or add a rule to \(Reader.configPath).
+                """
+            case let .missingEditor(named):
+                // Names what it looked for and where, like the viewer message,
+                // but points at the two places an editor can be set rather than
+                // at the rules file, which has nothing to do with it.
+                """
+                \(named.isEmpty ? "The editor" : named) is not installed, or not on the login shell's PATH. \
+                Set EDITOR in your shell, or `defaults write land.liberato.zmxterm editorCommand "…"`.
                 """
             case let .noRule(file):
                 "No viewer rule matches \((file as NSString).lastPathComponent). Add one to \(Reader.configPath)."
@@ -782,7 +845,12 @@ extension ZmxRegistry {
     /// ordinary here — the reader may well be created by this very call. `zmx
     /// send` is the same input from the other side of the socket, and it works
     /// on a session nobody is watching.
-    private func send(_ text: String, to session: String, store: PaneStore) {
+    ///
+    /// Not private, because #26's editor sends into a pane it has just created
+    /// — the case the second half of that paragraph describes — and a second
+    /// copy of "attached model or `zmx send`" would be one more place to get
+    /// the never-attached case wrong.
+    func send(_ text: String, to session: String, store: PaneStore) {
         if let model = store.attachedModel(for: session) {
             model.insert(text)
         } else {

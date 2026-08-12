@@ -142,6 +142,25 @@ that way: the decision itself is a pure function in `ReapPolicy` precisely so it
 can be argued about in `--selftest` rather than on a live machine, and the
 `--selftest` dry run must never gain a path to `zmx kill`.
 
+**The editor is never the reader, and is never stopped.** They look like one
+feature with a parameter and are opposites: a reader is reused because the next
+document should replace the last, and an editor gets a new pane every time
+because the thing in it is somebody's unsaved buffer. So `Editor` looks nothing
+up, marks nothing, and — the part easiest to "tidy" into symmetry — never sends
+a quit key or a signal. `Reader`'s stop-then-signal dance exists to clear a pane
+it means to reuse; there is nothing here to clear, and the same code pointed at
+an editor types a quit key into somebody's vim.
+
+**One `-ilc` answers both PATH and `$EDITOR`** (`Reader.login`). Starting an
+interactive login shell is the expensive part — ~525ms, mostly somebody's prompt
+framework — and it is paid once, lazily, for both answers. Resolving `$EDITOR`
+with a second shell would pay it again to read a variable the first shell had
+open in front of it. Note the print order: `$EDITOR` first, PATH second, split on
+the *first* newline, because only one of the two can safely be the remainder — a
+directory in PATH may contain very nearly anything, while an `$EDITOR` holding a
+newline is not a thing anybody has. Printed the other way round, a path with a
+newline in it silently eats the editor.
+
 ## Conventions
 
 Labels accept only `[A-Za-z0-9._-]`. Fold user input with `Zmx.slug`.

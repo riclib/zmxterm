@@ -1092,6 +1092,79 @@ enum SelfTest {
         print("note login PATH: \(Reader.loginPath.count) entries"
             + (Reader.loginPath.isEmpty ? "" : ", first \(Reader.loginPath.prefix(3).joined(separator: ":"))"))
 
+        // The editor. Which command runs, and what reaches the pty, are pure
+        // functions of two strings — which is the whole of what #26 decides,
+        // because everything after that is `split` doing what Split Right does.
+        //
+        // The order is override, then the login shell's EDITOR, then vim. The
+        // middle step is the point of the ticket: somebody who has set EDITOR
+        // has answered this already, and a second place to answer it is a
+        // second place for the two to disagree.
+        expect("an override wins",
+               Editor.command(override: "hx", environment: "nano"), "hx")
+        expect("the login shell's EDITOR is used when nothing overrides it",
+               Editor.command(override: nil, environment: "nano"), "nano")
+        expect("and vim is the fallback when neither says anything",
+               Editor.command(override: nil, environment: ""), "vim")
+        // Whitespace is not an answer. A `defaults write … editorCommand " "`
+        // and an unset EDITOR that printf rendered as a blank line both mean
+        // "nothing configured", and both used to be able to reach the shell as
+        // a command that is not a command.
+        expect("a blank override is not an opinion",
+               Editor.command(override: "   ", environment: "nano"), "nano")
+        expect("nor is a blank EDITOR",
+               Editor.command(override: nil, environment: "  \n"), "vim")
+
+        // EDITOR is a command line, not a binary — `code -w` has to keep its
+        // argument, or the editor returns immediately and the pane is idle.
+        expect("EDITOR keeps its arguments",
+               Editor.command(override: nil, environment: "code -w"), "code -w")
+        expect("and the file goes after them",
+               Reader.commandLine(Editor.command(override: nil, environment: "code -w"),
+                                  opening: "/tmp/a/notes.md"),
+               "code -w /tmp/a/notes.md")
+        // The same quoting the tree inserts paths with, because a filename with
+        // a space is the common case rather than the exotic one.
+        expect("a path with a space survives quoted",
+               Reader.commandLine("vim", opening: "/tmp/a/two words.md"),
+               "vim '/tmp/a/two words.md'")
+        expect("an editor can put the file somewhere other than the end",
+               Reader.commandLine("hx {path} +10", opening: "/tmp/a/notes.md"),
+               "hx /tmp/a/notes.md +10")
+        // Which binary is checked for. Not the basename: an EDITOR naming a
+        // path has to be asked about at that path, or a different binary of the
+        // same name on the PATH answers for it.
+        expect("the binary is the first word",
+               Editor.executable(of: "code -w"), "code")
+        expect("an absolute editor keeps its path",
+               Editor.executable(of: "/opt/homebrew/bin/nvim"), "/opt/homebrew/bin/nvim")
+        expect("and a leading assignment is not the editor",
+               Editor.executable(of: "VISUAL=1 nvim"), "nvim")
+        // What reaches the pty. Return at the end, and no quit key anywhere —
+        // an editor is never stopped by this app, which is the other half of
+        // the rule that keeps it out of the reader.
+        expect("what actually reaches the pty",
+               visible(Reader.keystrokes(command: "vim", opening: "/tmp/a/notes.md")),
+               "^U vim /tmp/a/notes.md CR")
+        // The message names the editor it looked for and where it looked, since
+        // both are things to go and fix.
+        expect("a missing editor names itself",
+               Reader.Outcome.missingEditor("hx").problem?.contains("hx") == true ? "named" : "vague",
+               "named")
+        expect("and says where it looked",
+               Reader.Outcome.missingEditor("hx").problem?
+                   .contains("login shell's PATH") == true ? "named" : "vague", "named")
+        expect("and how to fix it",
+               Reader.Outcome.missingEditor("hx").problem?
+                   .contains("editorCommand") == true ? "named" : "vague", "named")
+
+        // What this build would open, which depends on the machine and so
+        // reports. It answers the question a failed Open in Editor raises.
+        let editor = Editor.command()
+        print("note editor: \(editor)"
+            + " [\(Reader.isInstalled(executable: Editor.executable(of: editor)) ? "installed" : "not installed")]"
+            + " EDITOR=\(Reader.login.editor.isEmpty ? "<unset>" : Reader.login.editor)")
+
         // The round trip itself, which needs a daemon and so reports rather
         // than fails — the layout above was read off exactly these bytes, and
         // the cheapest way to notice a zmx release moving a field is to see the
